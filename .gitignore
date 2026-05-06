@@ -1,0 +1,38 @@
+# Top-level — per-component .gitignores live in backend/ and ios/
+
+# macOS
+.DS_Store
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+.cursor/
+
+# Local secrets — NEVER commit
+.env
+.env.local
+.env.*.local
+
+# Build output (re-stated for safety)
+node_modules/
+dist/
+build/
+out/
+.next/
+.turbo/
+
+# Vercel link
+.vercel/
+
+# iOS regenerated artifacts
+ios/*.xcodeproj/
+ios/*.xcworkspace/
+ios/build/
+ios/DerivedData/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*

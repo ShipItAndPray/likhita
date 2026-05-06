@@ -1,0 +1,137 @@
+# xcodegen project definition for the Likhita iOS workspace.
+# One Xcode project, two SwiftUI app targets (LikhitaRama, LikhitaRam),
+# four local Swift packages (KotiCore, KotiUI, KotiThemes, KotiL10n).
+#
+# Replace before first archive:
+#   {{TEAM_ID}}             — 10-char Apple Developer Team ID
+#   {{DEBUG_API_BASE}}      — local dev backend URL (e.g. http://localhost:3000)
+#   {{RELEASE_API_BASE}}    — production API (e.g. https://api.likhita.org)
+#
+# `xcodegen generate` materializes Likhita.xcodeproj — gitignored,
+# regenerated on every Xcode Cloud run by ci_scripts/ci_post_clone.sh.
+
+name: Likhita
+
+options:
+  bundleIdPrefix: org.likhita
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+  developmentLanguage: en
+  groupSortPosition: top
+
+configs:
+  Debug: debug
+  Release: release
+
+settings:
+  base:
+    SWIFT_VERSION: "5.10"
+    DEVELOPMENT_TEAM: "WS486NY2HV"
+    CODE_SIGN_STYLE: Automatic
+    MARKETING_VERSION: "1.0.0"
+    CURRENT_PROJECT_VERSION: "1"
+    GENERATE_INFOPLIST_FILE: "NO"
+    ENABLE_PREVIEWS: "YES"
+    TARGETED_DEVICE_FAMILY: "1,2"
+    SWIFT_TREAT_WARNINGS_AS_ERRORS: "NO"
+    ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+    IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+  configs:
+    Debug:
+      CODE_SIGNING_REQUIRED: "NO"
+      CODE_SIGNING_ALLOWED: "NO"
+    Release:
+      CODE_SIGNING_REQUIRED: "YES"
+      CODE_SIGNING_ALLOWED: "YES"
+
+packages:
+  KotiCore:
+    path: Packages/KotiCore
+  KotiUI:
+    path: Packages/KotiUI
+  KotiThemes:
+    path: Packages/KotiThemes
+  KotiL10n:
+    path: Packages/KotiL10n
+
+targets:
+  # ── LikhitaRama (Telugu) ─────────────────────────────────────────────────
+  LikhitaRama:
+    type: application
+    platform: iOS
+    sources:
+      - path: LikhitaRama
+        excludes:
+          - "Info.plist"
+    resources:
+      - path: LikhitaRama/Assets.xcassets
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: org.likhita.rama
+        PRODUCT_NAME: "Likhita Rama"
+        INFOPLIST_FILE: LikhitaRama/Info.plist
+      configs:
+        Debug:
+          LIKHITA_API_BASE: "http://localhost:3000"
+        Release:
+          LIKHITA_API_BASE: "https://likhita-kappa.vercel.app"
+    dependencies:
+      - package: KotiCore
+      - package: KotiUI
+      - package: KotiThemes
+      - package: KotiL10n
+
+  # ── LikhitaRam (Hindi) ───────────────────────────────────────────────────
+  LikhitaRam:
+    type: application
+    platform: iOS
+    sources:
+      - path: LikhitaRam
+        excludes:
+          - "Info.plist"
+    resources:
+      - path: LikhitaRam/Assets.xcassets
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: org.likhita.ram
+        PRODUCT_NAME: "Likhita Ram"
+        INFOPLIST_FILE: LikhitaRam/Info.plist
+      configs:
+        Debug:
+          LIKHITA_API_BASE: "http://localhost:3000"
+        Release:
+          LIKHITA_API_BASE: "https://likhita-kappa.vercel.app"
+    dependencies:
+      - package: KotiCore
+      - package: KotiUI
+      - package: KotiThemes
+      - package: KotiL10n
+
+schemes:
+  LikhitaRama:
+    build:
+      targets:
+        LikhitaRama: all
+    run:
+      config: Debug
+    archive:
+      config: Release
+    profile:
+      config: Release
+    test:
+      config: Debug
+
+  LikhitaRam:
+    build:
+      targets:
+        LikhitaRam: all
+    run:
+      config: Debug
+    archive:
+      config: Release
+    profile:
+      config: Release
+    test:
+      config: Debug

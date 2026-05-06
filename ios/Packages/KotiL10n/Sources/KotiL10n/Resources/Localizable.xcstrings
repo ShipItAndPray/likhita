@@ -1,0 +1,78 @@
+{
+  "sourceLanguage" : "en",
+  "version" : "1.0",
+  "strings" : {
+    "common.welcome" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Welcome" } },
+        "hi" : { "stringUnit" : { "state" : "translated", "value" : "स्वागत है" } },
+        "te" : { "stringUnit" : { "state" : "translated", "value" : "స్వాగతం" } }
+      }
+    },
+    "common.begin" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Begin" } },
+        "hi" : { "stringUnit" : { "state" : "translated", "value" : "आरंभ करें" } },
+        "te" : { "stringUnit" : { "state" : "translated", "value" : "ఆరంభించండి" } }
+      }
+    },
+    "common.continue" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Continue" } },
+        "hi" : { "stringUnit" : { "state" : "translated", "value" : "जारी रखें" } },
+        "te" : { "stringUnit" : { "state" : "translated", "value" : "కొనసాగించండి" } }
+      }
+    },
+    "common.cancel" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Cancel" } },
+        "hi" : { "stringUnit" : { "state" : "translated", "value" : "रद्द करें" } },
+        "te" : { "stringUnit" : { "state" : "translated", "value" : "రద్దు చేయండి" } }
+      }
+    },
+    "common.complete" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Complete" } },
+        "hi" : { "stringUnit" : { "state" : "translated", "value" : "पूर्ण" } },
+        "te" : { "stringUnit" : { "state" : "translated", "value" : "పూర్తి" } }
+      }
+    },
+    "sankalpam.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Begin your sankalpam" } },
+        "hi" : { "stringUnit" : { "state" : "translated", "value" : "अपना संकल्प आरंभ करें" } },
+        "te" : { "stringUnit" : { "state" : "translated", "value" : "మీ సంకల్పాన్ని ఆరంభించండి" } }
+      }
+    },
+    "sankalpam.dedication" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Dedication" } },
+        "hi" : { "stringUnit" : { "state" : "translated", "value" : "समर्पण" } },
+        "te" : { "stringUnit" : { "state" : "translated", "value" : "అంకితం" } }
+      }
+    },
+    "sankalpam.mode" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Mode" } },
+        "hi" : { "stringUnit" : { "state" : "translated", "value" : "विधि" } },
+        "te" : { "stringUnit" : { "state" : "translated", "value" : "విధానం" } }
+      }
+    },
+    "sankalpam.theme" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Theme" } },
+        "hi" : { "stringUnit" : { "state" : "translated", "value" : "विषय" } },
+        "te" : { "stringUnit" : { "state" : "translated", "value" : "థీమ్" } }
+      }
+    }
+  }
+}

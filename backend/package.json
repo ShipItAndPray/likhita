@@ -1,0 +1,50 @@
+{
+  "name": "likhita-backend",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Likhita Foundation backend — shared API + transparency portal for Likhita Rama and Likhita Ram iOS apps",
+  "scripts": {
+    "dev": "next dev -p 3000",
+    "build": "next build",
+    "start": "next start -p 3000",
+    "lint": "next lint",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "db:push": "drizzle-kit push",
+    "db:studio": "drizzle-kit studio"
+  },
+  "dependencies": {
+    "@clerk/nextjs": "^7.3.1",
+    "@neondatabase/serverless": "^0.10.4",
+    "@sentry/nextjs": "^10.51.0",
+    "drizzle-orm": "^0.36.4",
+    "inngest": "^3.27.0",
+    "next": "^16.2.5",
+    "posthog-node": "^4.4.0",
+    "razorpay": "^2.9.5",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6",
+    "resend": "^4.0.1",
+    "stripe": "^17.4.0",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/react": "^19.0.2",
+    "@types/react-dom": "^19.0.2",
+    "autoprefixer": "^10.4.20",
+    "drizzle-kit": "^0.30.1",
+    "eslint": "^9.17.0",
+    "eslint-config-next": "^16.2.5",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.17",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
