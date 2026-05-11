@@ -2,8 +2,9 @@ import SwiftUI
 import KotiCore
 import KotiThemes
 
-/// Minimal settings screen — active koti summary, past kotis, foundation
-/// links, designer jump rows.
+/// Minimal settings screen — active koti summary (when one exists), past
+/// kotis (when there are any), foundation links. Designer jump rows are
+/// gated to DEBUG so they never ship to TestFlight or App Store.
 public struct SettingsView: View {
     let tradition: TraditionContent
     let theme: any Theme
@@ -25,6 +26,8 @@ public struct SettingsView: View {
         self.onJump = onJump
     }
 
+    private var hasActiveKoti: Bool { koti.target > 0 && koti.count > 0 }
+
     public var body: some View {
         ZStack {
             theme.chromeBg.ignoresSafeArea()
@@ -32,29 +35,28 @@ public struct SettingsView: View {
                 header
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
-                        sectionHeader("ACTIVE KOTI")
-                        card {
-                            row(label: "Mode", value: KotiModeCatalog.plan(forKey: koti.modeKey).label)
-                            row(label: "Theme", value: theme.displayName)
-                            row(label: "Stylus", value: InkPalette.name(forHex: koti.inkHex))
-                            row(label: "Progress", value: "\(formatted(koti.count)) / \(formatted(koti.target))")
-                            row(label: "Audio", value: "Off", isLast: true)
+                        if hasActiveKoti {
+                            sectionHeader("ACTIVE KOTI")
+                            card {
+                                row(label: "Mode", value: KotiModeCatalog.plan(forKey: koti.modeKey).label)
+                                row(label: "Theme", value: theme.displayName)
+                                row(label: "Stylus", value: InkPalette.name(forHex: koti.inkHex))
+                                row(label: "Progress", value: "\(formatted(koti.count)) / \(formatted(koti.target))")
+                                row(label: "Audio", value: "Off", isLast: true)
+                            }
                         }
 
-                        sectionHeader("PAST KOTIS").padding(.top, 20)
-                        card {
-                            row(label: "Trial · 1,000", value: "Mar 2026 ✓")
-                            row(label: "Sankalpa · 51,000", value: "Jan 2026 · at temple", isLast: true)
-                        }
-
-                        sectionHeader("FOUNDATION").padding(.top, 20)
+                        sectionHeader("FOUNDATION")
+                            .padding(.top, hasActiveKoti ? 20 : 0)
                         card {
                             row(label: "Transparency portal", value: "likhita.org")
                             row(label: "Support the Foundation", value: "optional")
                             row(label: "Privacy", value: "")
-                            row(label: "About", value: "v1.0", isLast: true)
+                            row(label: "About", value: "v1.0")
+                            row(label: "Sangha by", value: "Mammu Inc.", isLast: true)
                         }
 
+                        #if DEBUG
                         sectionHeader("DESIGNER JUMP").padding(.top, 20)
                         card {
                             ForEach(designerJumpKeys, id: \.self) { key in
@@ -63,6 +65,7 @@ public struct SettingsView: View {
                                 }
                             }
                         }
+                        #endif
                     }
                     .padding(.bottom, 40)
                 }
@@ -72,8 +75,9 @@ public struct SettingsView: View {
     }
 
     private let designerJumpKeys = [
-        "welcome", "identity", "dedication", "stylus", "pledge",
-        "writing", "path", "completion", "book", "ship", "status"
+        "threshold", "welcome", "identity", "dedication", "stylus", "pledge",
+        "writing", "path", "completion", "book", "ship", "status",
+        "sharedHub", "sharedWrite", "sharedHands",
     ]
 
     private var header: some View {
@@ -146,12 +150,11 @@ public struct SettingsView: View {
             .padding(.vertical, 14)
             .overlay(
                 Rectangle()
-                    .fill(.black.opacity(0.08))
+                    .fill(.black.opacity(isLast ? 0 : 0.08))
                     .frame(height: 0.5)
                     .padding(.horizontal, 16),
                 alignment: .bottom
             )
-            .opacity(isLast ? 1 : 1)
         }
         .buttonStyle(.plain)
         .disabled(action == nil)
