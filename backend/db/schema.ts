@@ -181,6 +181,54 @@ export const devices = pgTable("devices", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// The Sangha — communal Foundation Koti shared across all devotees.
+// Append-only, no per-user ownership, 1-crore ceiling. One row in
+// `shared_kotis`; every devotee's mantra appends to `shared_entries`.
+// Aggregates (top writers, country breakdown) are computed by GROUP BY at
+// read time — small enough volume that materialized views are overkill.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const sharedKotis = pgTable("shared_kotis", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  name: text("name").notNull(),
+  nameLocal: text("name_local").notNull(),
+  targetCount: bigint("target_count", { mode: "number" }).notNull(),
+  currentCount: bigint("current_count", { mode: "number" }).notNull().default(0),
+  custodian: text("custodian").notNull(),
+  destination: text("destination").notNull(),
+  estimatedShipDate: text("estimated_ship_date").notNull(),
+  startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const sharedEntries = pgTable(
+  "shared_entries",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    sharedKotiId: uuid("shared_koti_id")
+      .notNull()
+      .references(() => sharedKotis.id, { onDelete: "cascade" }),
+    // Stable per-device identifier — used to compute unique-writer count
+    // without requiring authentication. iOS sends KotiStore.stableUserId().
+    deviceId: text("device_id").notNull(),
+    // Display name + place are optional. If both blank we render the
+    // contribution as "Anonymous". The user can change this per-write.
+    displayName: text("display_name"),
+    place: text("place"),
+    country: text("country"),
+    cadenceSignature: text("cadence_signature").notNull(),
+    flagged: boolean("flagged").notNull().default(false),
+    committedAt: timestamp("committed_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    kotiTs: index("shared_entries_koti_ts").on(t.sharedKotiId, t.committedAt),
+    deviceIdx: index("shared_entries_device").on(t.deviceId),
+    countryIdx: index("shared_entries_country").on(t.sharedKotiId, t.country),
+  }),
+);
+
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
 export type Koti = typeof kotis.$inferSelect;
@@ -190,3 +238,7 @@ export type NewEntry = typeof entries.$inferInsert;
 export type Payment = typeof payments.$inferSelect;
 export type ShipBatch = typeof shipBatches.$inferSelect;
 export type Device = typeof devices.$inferSelect;
+export type SharedKoti = typeof sharedKotis.$inferSelect;
+export type NewSharedKoti = typeof sharedKotis.$inferInsert;
+export type SharedEntry = typeof sharedEntries.$inferSelect;
+export type NewSharedEntry = typeof sharedEntries.$inferInsert;

@@ -158,6 +158,87 @@ public actor LikhitaService {
     public func submitEntries(kotiId: String, request: SubmitEntriesRequest) async throws -> SubmitEntriesResponse {
         try await api.post("/api/v1/kotis/\(kotiId)/entries", body: request)
     }
+
+    // MARK: - Shared (Foundation) Koti
+
+    public struct ServerSharedKoti: Decodable, Sendable {
+        public let id: String
+        public let name: String
+        public let nameLocal: String
+        public let targetCount: Int
+        public let currentCount: Int
+        public let custodian: String
+        public let destination: String
+        public let estimatedShipDate: String
+        public let startedAt: String
+    }
+
+    public struct ServerSharedWriter: Decodable, Sendable {
+        public let name: String
+        public let place: String
+        public let count: Int
+        public let ago: String
+        public let committedAt: String
+    }
+
+    public struct ServerSharedTopWriter: Decodable, Sendable {
+        public let name: String
+        public let count: Int
+        public let joined: String
+    }
+
+    public struct ServerSharedCountry: Decodable, Sendable {
+        public let country: String
+        public let count: Int
+    }
+
+    public struct SharedHubSnapshot: Decodable, Sendable {
+        public let koti: ServerSharedKoti
+        public let uniqueWriters: Int
+        public let countriesActive: Int
+        public let recentWriters: [ServerSharedWriter]
+        public let topWriters: [ServerSharedTopWriter]
+        public let countries: [ServerSharedCountry]
+    }
+
+    public func getSharedHub() async throws -> SharedHubSnapshot {
+        try await api.get("/api/v1/shared/koti")
+    }
+
+    public struct SharedEntryPayload: Encodable, Sendable {
+        public let committedAt: String
+        public let cadenceSignature: CadenceSignaturePayload
+        public init(committedAt: Date, gaps: [Double]) {
+            self.committedAt = ISO8601DateFormatter.standard.string(from: committedAt)
+            self.cadenceSignature = CadenceSignaturePayload(gaps: gaps)
+        }
+    }
+
+    public struct SharedAppendRequest: Encodable, Sendable {
+        public let deviceId: String
+        public let displayName: String?
+        public let place: String?
+        public let country: String?
+        public let entries: [SharedEntryPayload]
+        public init(deviceId: String, displayName: String? = nil, place: String? = nil, country: String? = nil, entries: [SharedEntryPayload]) {
+            self.deviceId = deviceId
+            self.displayName = displayName
+            self.place = place
+            self.country = country
+            self.entries = entries
+        }
+    }
+
+    public struct SharedAppendResponse: Decodable, Sendable {
+        public let acceptedHere: Int
+        public let currentCount: Int
+        public let remaining: Int
+        public let complete: Bool
+    }
+
+    public func appendSharedEntries(_ req: SharedAppendRequest) async throws -> SharedAppendResponse {
+        try await api.post("/api/v1/shared/entries", body: req)
+    }
 }
 
 extension ISO8601DateFormatter {

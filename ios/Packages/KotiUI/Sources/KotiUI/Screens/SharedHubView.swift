@@ -3,39 +3,39 @@ import KotiCore
 import KotiThemes
 
 /// The Sangha — communal hub. Cloth-coloured cover, live counter, stats
-/// tiles, "writing now" ticker (rotates every 2.6s), permanence note, and
-/// a sticky CTA to add your hand.
+/// tiles, "writing now" ticker (rotates through the recent writers from
+/// the server), permanence note, and a sticky CTA to add your hand.
 public struct SharedHubView: View {
     let tradition: TraditionContent
     let theme: any Theme
+    @Bindable var vm: SharedKotiViewModel
     let onWrite: () -> Void
     let onOpenWriters: () -> Void
     let onClose: () -> Void
 
     @State private var tickerIdx: Int = 0
-    @State private var nudge: Int64 = 0
 
     public init(
         tradition: TraditionContent,
         theme: any Theme,
+        vm: SharedKotiViewModel,
         onWrite: @escaping () -> Void,
         onOpenWriters: @escaping () -> Void,
         onClose: @escaping () -> Void
     ) {
         self.tradition = tradition
         self.theme = theme
+        self.vm = vm
         self.onWrite = onWrite
         self.onOpenWriters = onOpenWriters
         self.onClose = onClose
     }
 
-    private var k: SharedKoti { SharedKotiCatalog.sample }
-    private var liveCount: Int64 { k.count + nudge }
-    private var pct: Double {
-        guard k.target > 0 else { return 0 }
-        return Double(liveCount) / Double(k.target)
-    }
-    private var remaining: Int64 { max(0, k.target - liveCount) }
+    private var snap: LikhitaService.SharedHubSnapshot? { vm.snapshot }
+    private var liveCount: Int64 { Int64(snap?.koti.currentCount ?? 0) }
+    private var target: Int64 { Int64(snap?.koti.targetCount ?? 10_000_000) }
+    private var pct: Double { target > 0 ? Double(liveCount) / Double(target) : 0 }
+    private var remaining: Int64 { max(0, target - liveCount) }
 
     public var body: some View {
         ZStack(alignment: .bottom) {
@@ -66,7 +66,13 @@ public struct SharedHubView: View {
             ctaBar
         }
         .foregroundStyle(theme.page)
-        .onAppear { startTimers() }
+        .task {
+            vm.startPolling()
+            startTickerLoop()
+        }
+        .onDisappear {
+            vm.stopPolling()
+        }
     }
 
     private var header: some View {
@@ -96,11 +102,11 @@ public struct SharedHubView: View {
     private var title: some View {
         VStack(spacing: 8) {
             SriYantra(foil: theme.foil, size: 42)
-            Text(k.nameLocal)
+            Text(snap?.koti.nameLocal ?? "")
                 .font(.custom(tradition.displayFontKey, size: 28))
                 .foregroundStyle(theme.foil)
                 .multilineTextAlignment(.center)
-            Text(k.name)
+            Text(snap?.koti.name ?? "The Foundation Koti")
                 .font(.custom("EB Garamond", size: 15))
                 .italic()
                 .foregroundStyle(theme.page.opacity(0.85))
@@ -133,7 +139,7 @@ public struct SharedHubView: View {
                     .kerning(0.4)
                     .foregroundStyle(theme.foil)
                 Spacer()
-                Text("/ \(formatted(k.target))")
+                Text("/ \(formatted(target))")
                     .font(.custom("EB Garamond", size: 16))
                     .foregroundStyle(theme.page.opacity(0.5))
             }
@@ -179,10 +185,22 @@ public struct SharedHubView: View {
 
     private var statTiles: some View {
         HStack(spacing: 8) {
-            statTile(label: "DEVOTEES", value: formatted(Int64(k.uniqueWriters)), sub: "unique hands", action: onOpenWriters)
-            statTile(label: "COUNTRIES", value: "\(k.countriesActive)", sub: "and growing", action: nil)
-            statTile(label: "BEGUN", value: k.startedOn.components(separatedBy: "·").first?.trimmingCharacters(in: .whitespaces) ?? "—", sub: "Sankranti", action: nil)
+            statTile(label: "DEVOTEES", value: formatted(Int64(snap?.uniqueWriters ?? 0)), sub: "unique hands", action: onOpenWriters)
+            statTile(label: "COUNTRIES", value: "\(snap?.countriesActive ?? 0)", sub: "and growing", action: nil)
+            statTile(label: "BEGUN", value: beganText, sub: "Sankranti", action: nil)
         }
+    }
+
+    private var beganText: String {
+        guard let s = snap?.koti.startedAt else { return "—" }
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let date = iso.date(from: s) ?? ISO8601DateFormatter().date(from: s)
+        guard let date else { return "—" }
+        let f = DateFormatter()
+        f.dateFormat = "MMM dd"
+        f.locale = Locale(identifier: "en_US")
+        return f.string(from: date)
     }
 
     private func statTile(label: String, value: String, sub: String, action: (() -> Void)?) -> some View {
@@ -215,7 +233,7 @@ public struct SharedHubView: View {
     }
 
     private var ticker: some View {
-        let writers = SharedKotiCatalog.recentWriters
+        let writers = snap?.recentWriters ?? []
         return VStack(alignment: .leading, spacing: 8) {
             HStack {
                 HStack(spacing: 7) {
@@ -236,19 +254,29 @@ public struct SharedHubView: View {
                     .foregroundStyle(theme.page.opacity(0.55))
             }
             VStack(alignment: .leading, spacing: 4) {
-                ForEach(0..<3, id: \.self) { offset in
-                    let writer = writers[(tickerIdx + offset) % writers.count]
-                    let isTop = (offset == 0)
-                    HStack {
-                        Group {
-                            Text(writer.name).fontWeight(.medium) +
-                            Text(" · \(writer.place)").foregroundColor(Color.gray)
+                if writers.isEmpty {
+                    Text("No writers yet — be the first to add your hand.")
+                        .font(.custom("EB Garamond", size: 12))
+                        .italic()
+                        .foregroundStyle(theme.page.opacity(0.55))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    ForEach(0..<3, id: \.self) { offset in
+                        if writers.count > 0 {
+                            let writer = writers[(tickerIdx + offset) % writers.count]
+                            let isTop = (offset == 0)
+                            HStack {
+                                Group {
+                                    Text(writer.name).fontWeight(.medium) +
+                                    Text(writer.place.isEmpty ? "" : " · \(writer.place)").foregroundColor(Color.gray)
+                                }
+                                Spacer()
+                                Text("+\(writer.count) · \(writer.ago)")
+                            }
+                            .font(.custom("EB Garamond", size: isTop ? 13 : 12))
+                            .foregroundStyle(theme.page.opacity(isTop ? 1 : (0.45 - Double(offset) * 0.12)))
                         }
-                        Spacer()
-                        Text("+\(writer.count) · \(writer.ago)")
                     }
-                    .font(.custom("EB Garamond", size: isTop ? 13 : 12))
-                    .foregroundStyle(theme.page.opacity(isTop ? 1 : (0.45 - Double(offset) * 0.12)))
                 }
             }
             .frame(minHeight: 70, alignment: .center)
@@ -265,13 +293,17 @@ public struct SharedHubView: View {
     }
 
     private var permanenceNote: some View {
-        HStack(alignment: .top, spacing: 10) {
+        let writers = snap?.uniqueWriters ?? 0
+        return HStack(alignment: .top, spacing: 10) {
             Text(String(tradition.mantra.prefix(1)))
                 .font(.custom(tradition.displayFontKey, size: 22))
                 .foregroundStyle(theme.foil)
             VStack(alignment: .leading, spacing: 4) {
                 (Text("Append-only ledger.").bold() +
-                 Text(" Once written, never erased — not by you, not by anyone. Your hand joins \(formatted(Int64(k.uniqueWriters))) others on a single sacred book the Foundation will bind and carry to \(tradition.templeShort)."))
+                 Text(writers > 0
+                      ? " Once written, never erased — not by you, not by anyone. Your hand joins \(formatted(Int64(writers))) others on a single sacred book the Foundation will bind and carry to \(tradition.templeShort)."
+                      : " Once written, never erased — not by you, not by anyone. The Foundation will bind this book and carry it to \(tradition.templeShort)."
+                 ))
                     .font(.custom("EB Garamond", size: 11.5))
                     .italic()
                     .foregroundStyle(theme.page.opacity(0.85))
@@ -318,20 +350,14 @@ public struct SharedHubView: View {
         )
     }
 
-    private func startTimers() {
+    private func startTickerLoop() {
         Task {
             while true {
                 try? await Task.sleep(nanoseconds: 2_600_000_000)
                 await MainActor.run {
-                    tickerIdx = (tickerIdx + 1) % SharedKotiCatalog.recentWriters.count
-                }
-            }
-        }
-        Task {
-            while true {
-                try? await Task.sleep(nanoseconds: 1_400_000_000)
-                await MainActor.run {
-                    nudge += Int64.random(in: 2...12)
+                    if let count = vm.snapshot?.recentWriters.count, count > 0 {
+                        tickerIdx = (tickerIdx + 1) % count
+                    }
                 }
             }
         }

@@ -2,18 +2,18 @@ import SwiftUI
 import KotiCore
 import KotiThemes
 
-/// Write into the communal book. Mixed-ink mantras (different colors per
-/// "writer"). User's own entries are circled in red. Append-only — no
-/// completion ceremony, no target reached. Just hands joining hands.
+/// Write into the communal book. Mixed-ink mantras, user's own entries
+/// circled. The view feeds keystrokes into `SharedKotiViewModel.cadence`
+/// and commits each completed mantra via `commitMantra()` which buffers
+/// the entry and flushes to `POST /api/v1/shared/entries` on a debounce.
 public struct SharedWritingView: View {
     let tradition: TraditionContent
     let theme: any Theme
+    @Bindable var vm: SharedKotiViewModel
     let onClose: () -> Void
 
     @State private var typed: String = ""
-    @State private var mySession: Int = 0
     @State private var shake: Bool = false
-    @State private var worldBonus: Int64 = 0
 
     private let cols = 6
     private let rows = 10
@@ -21,16 +21,19 @@ public struct SharedWritingView: View {
     public init(
         tradition: TraditionContent,
         theme: any Theme,
+        vm: SharedKotiViewModel,
         onClose: @escaping () -> Void
     ) {
         self.tradition = tradition
         self.theme = theme
+        self.vm = vm
         self.onClose = onClose
     }
 
-    private var k: SharedKoti { SharedKotiCatalog.sample }
-    private var liveCount: Int64 { k.count + worldBonus + Int64(mySession) }
-    private var pct: Double { Double(liveCount) / Double(k.target) }
+    private var snap: LikhitaService.SharedHubSnapshot? { vm.snapshot }
+    private var liveCount: Int64 { Int64(snap?.koti.currentCount ?? 0) + Int64(vm.mySessionCount) }
+    private var target: Int64 { Int64(snap?.koti.targetCount ?? 10_000_000) }
+    private var pct: Double { target > 0 ? Double(liveCount) / Double(target) : 0 }
     private var visibleCount: Int { cols * rows }
 
     private let palette: [String] = [
@@ -48,7 +51,8 @@ public struct SharedWritingView: View {
             }
         }
         .foregroundStyle(theme.textPrimary)
-        .onAppear { startWorldBonus() }
+        .task { vm.startPolling() }
+        .onDisappear { vm.stopPolling() }
     }
 
     private var topBar: some View {
@@ -73,19 +77,32 @@ public struct SharedWritingView: View {
                     .foregroundStyle(theme.textPrimary.opacity(0.55))
             }
             Spacer()
-            HStack(spacing: 6) {
-                Circle()
-                    .fill(Color(hex: "#5BCB81"))
-                    .frame(width: 6, height: 6)
-                    .modifier(LiveDotAnimation())
-                Text("\(formatted(Int64(312 + Int(worldBonus % 30)))) writing")
-                    .font(.system(size: 11))
+            if vm.pendingFlush > 0 {
+                HStack(spacing: 6) {
+                    ProgressView().scaleEffect(0.6)
+                    Text("syncing \(vm.pendingFlush)")
+                        .font(.system(size: 11))
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(theme.page)
+                .clipShape(Capsule())
+                .overlay(Capsule().stroke(theme.foil, lineWidth: 0.5))
+            } else {
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(Color(hex: "#5BCB81"))
+                        .frame(width: 6, height: 6)
+                        .modifier(LiveDotAnimation())
+                    Text("live")
+                        .font(.system(size: 11))
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(theme.page)
+                .clipShape(Capsule())
+                .overlay(Capsule().stroke(theme.foil, lineWidth: 0.5))
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .background(theme.page)
-            .clipShape(Capsule())
-            .overlay(Capsule().stroke(theme.foil, lineWidth: 0.5))
         }
         .padding(.horizontal, 16)
         .padding(.top, 54)
@@ -103,7 +120,7 @@ public struct SharedWritingView: View {
                     Spacer()
                     PetalBorder(foil: theme.foil, width: 100)
                     Spacer()
-                    Text("\(formatted(Int64(k.uniqueWriters))) HANDS")
+                    Text("\(formatted(Int64(snap?.uniqueWriters ?? 0))) HANDS")
                         .font(.system(size: 9))
                         .kerning(2.4)
                         .foregroundStyle(theme.textPrimary.opacity(0.42))
@@ -140,7 +157,7 @@ public struct SharedWritingView: View {
 
     private func cell(at i: Int) -> some View {
         let inkHex = palette[(i * 31) % palette.count]
-        let isMine = i >= visibleCount - mySession
+        let isMine = i >= visibleCount - vm.mySessionCount
         let color = isMine ? Color(hex: "#E34234") : Color(hex: inkHex)
         return ZStack {
             MantraEntry(
@@ -191,7 +208,7 @@ public struct SharedWritingView: View {
             HStack {
                 Group {
                     Text("You have written ") +
-                    Text("\(mySession)").bold() +
+                    Text("\(vm.mySessionCount)").bold() +
                     Text(" in this session")
                 }
                 .font(.custom("EB Garamond", size: 10))
@@ -212,8 +229,9 @@ public struct SharedWritingView: View {
 
     private func handleInput(_ raw: String) {
         let v = raw.lowercased().filter { $0.isLetter }
+        if !v.isEmpty { vm.recordKeystroke() }
         if v == tradition.mantraTyped {
-            mySession += 1
+            vm.commitMantra()
             typed = ""
         } else if tradition.mantraTyped.hasPrefix(v) {
             if v != raw { typed = v }
@@ -221,17 +239,6 @@ public struct SharedWritingView: View {
             withAnimation(.linear(duration: 0.3)) { shake = true }
             typed = ""
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { shake = false }
-        }
-    }
-
-    private func startWorldBonus() {
-        Task {
-            while true {
-                try? await Task.sleep(nanoseconds: 1_200_000_000)
-                await MainActor.run {
-                    worldBonus += Int64.random(in: 3...15)
-                }
-            }
         }
     }
 

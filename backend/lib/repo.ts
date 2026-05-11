@@ -8,7 +8,7 @@
 // Routes never import drizzle directly. They call functions from this module,
 // which dispatches to one of the two backends based on the environment.
 
-import { eq, and, sql, desc } from "drizzle-orm";
+import { eq, and, sql, desc, gt } from "drizzle-orm";
 import { getDb, schema } from "@/db/client";
 import type { AppOrigin } from "@/db/schema";
 
@@ -484,4 +484,332 @@ export async function commitEntries(input: CommitEntriesInput): Promise<CommitEn
   }
 
   return { ok: true, currentCount: Number(updatedRow.currentCount) };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The Sangha — Foundation Koti reads + appends.
+// One row, no per-user ownership, no sequence enforcement, 1 crore ceiling.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type SharedKotiRow = {
+  id: string;
+  name: string;
+  nameLocal: string;
+  targetCount: number;
+  currentCount: number;
+  custodian: string;
+  destination: string;
+  estimatedShipDate: string;
+  startedAt: string;
+};
+
+export type SharedHubSnapshot = {
+  koti: SharedKotiRow;
+  uniqueWriters: number;
+  countriesActive: number;
+  recentWriters: { name: string; place: string; count: number; ago: string; committedAt: string }[];
+  topWriters: { name: string; count: number; joined: string }[];
+  countries: { country: string; count: number }[];
+};
+
+export type SharedAppendInput = {
+  deviceId: string;
+  displayName: string | null;
+  place: string | null;
+  country: string | null;
+  cadenceFingerprints: string[];
+  flagged: boolean[];
+};
+
+export type SharedAppendResult = {
+  acceptedHere: number;
+  currentCount: number;
+  remaining: number;
+  complete: boolean;
+};
+
+function rowToSharedKoti(r: typeof schema.sharedKotis.$inferSelect): SharedKotiRow {
+  return {
+    id: r.id,
+    name: r.name,
+    nameLocal: r.nameLocal,
+    targetCount: Number(r.targetCount),
+    currentCount: Number(r.currentCount),
+    custodian: r.custodian,
+    destination: r.destination,
+    estimatedShipDate: r.estimatedShipDate,
+    startedAt: r.startedAt instanceof Date ? r.startedAt.toISOString() : String(r.startedAt),
+  };
+}
+
+const TEST_SHARED_KOTI_ID = "feedface-cafe-babe-0042-deadbeefcafe";
+
+/// Returns the single active foundation koti row. Throws if none seeded.
+export async function getActiveSharedKoti(): Promise<SharedKotiRow> {
+  if (isTest()) {
+    const mem = sharedMemStore();
+    if (!mem.koti) {
+      mem.koti = {
+        id: TEST_SHARED_KOTI_ID,
+        name: "The Foundation Koti",
+        nameLocal: "సర్వజన రామ కోటి",
+        targetCount: 10_000_000,
+        currentCount: 0,
+        custodian: "Likhita Foundation",
+        destination: "Sri Sita Ramachandra Swamy Temple, Bhadrachalam",
+        estimatedShipDate: "Vaikuntha Ekadashi · Dec 31, 2026",
+        startedAt: new Date("2026-01-14T00:00:00Z").toISOString(),
+      };
+    }
+    return { ...mem.koti };
+  }
+  const db = getDb();
+  const rows = await db.select().from(schema.sharedKotis).limit(1);
+  const r = rows[0];
+  if (!r) throw new Error("No shared koti seeded. Run the seed script.");
+  return rowToSharedKoti(r);
+}
+
+/// Pull a full hub snapshot: koti row + aggregated stats (unique writers,
+/// countries active, recent ticker, top contributors, country breakdown).
+/// All aggregations live in single round-trip parallel queries against the
+/// shared_entries table.
+export async function getSharedHubSnapshot(): Promise<SharedHubSnapshot> {
+  const koti = await getActiveSharedKoti();
+
+  if (isTest()) {
+    const mem = sharedMemStore();
+    const entries = mem.entries;
+    const uniqueDevices = new Set(entries.map((e) => e.deviceId)).size;
+    const uniqueCountries = new Set(entries.map((e) => e.country).filter(Boolean)).size;
+    const countByDeviceName = new Map<string, number>();
+    const countByCountry = new Map<string, number>();
+    for (const e of entries) {
+      const key = `${e.displayName ?? "Anonymous"}|${e.place ?? ""}`;
+      countByDeviceName.set(key, (countByDeviceName.get(key) ?? 0) + 1);
+      if (e.country) countByCountry.set(e.country, (countByCountry.get(e.country) ?? 0) + 1);
+    }
+    return {
+      koti,
+      uniqueWriters: uniqueDevices,
+      countriesActive: uniqueCountries,
+      recentWriters: entries.slice(-12).reverse().map((e) => ({
+        name: e.displayName ?? "Anonymous",
+        place: e.place ?? "",
+        count: 1,
+        ago: "live",
+        committedAt: e.committedAt,
+      })),
+      topWriters: Array.from(countByDeviceName.entries())
+        .map(([k, count]) => {
+          const name = k.split("|")[0] ?? "Anonymous";
+          return { name, count, joined: "" };
+        })
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 6),
+      countries: Array.from(countByCountry.entries())
+        .map(([country, count]) => ({ country, count }))
+        .sort((a, b) => b.count - a.count),
+    };
+  }
+
+  const db = getDb();
+
+  const [aggRows, recentRows, topRows, countryRows] = await Promise.all([
+    db.execute(sql`
+      SELECT
+        COUNT(DISTINCT device_id) AS unique_writers,
+        COUNT(DISTINCT country) FILTER (WHERE country IS NOT NULL AND country <> '') AS countries_active
+      FROM likhita.shared_entries
+      WHERE shared_koti_id = ${koti.id}
+    `),
+    db.execute(sql`
+      SELECT
+        COALESCE(display_name, 'Anonymous') AS name,
+        COALESCE(place, '') AS place,
+        committed_at
+      FROM likhita.shared_entries
+      WHERE shared_koti_id = ${koti.id}
+      ORDER BY committed_at DESC
+      LIMIT 12
+    `),
+    db.execute(sql`
+      SELECT
+        COALESCE(
+          (SELECT display_name FROM likhita.shared_entries e2
+             WHERE e2.device_id = e.device_id AND display_name IS NOT NULL
+             ORDER BY committed_at DESC LIMIT 1),
+          'Anonymous'
+        ) AS name,
+        COALESCE(
+          (SELECT place FROM likhita.shared_entries e3
+             WHERE e3.device_id = e.device_id AND place IS NOT NULL
+             ORDER BY committed_at DESC LIMIT 1),
+          ''
+        ) AS place,
+        COUNT(*) AS count,
+        MIN(committed_at) AS joined
+      FROM likhita.shared_entries e
+      WHERE shared_koti_id = ${koti.id}
+      GROUP BY device_id
+      ORDER BY count DESC
+      LIMIT 6
+    `),
+    db.execute(sql`
+      SELECT country, COUNT(*) AS count
+      FROM likhita.shared_entries
+      WHERE shared_koti_id = ${koti.id}
+        AND country IS NOT NULL AND country <> ''
+      GROUP BY country
+      ORDER BY count DESC
+      LIMIT 16
+    `),
+  ]);
+
+  const aggRow = (aggRows.rows ?? aggRows)[0] as { unique_writers: bigint | number; countries_active: bigint | number } | undefined;
+  const uniqueWriters = aggRow ? Number(aggRow.unique_writers) : 0;
+  const countriesActive = aggRow ? Number(aggRow.countries_active) : 0;
+
+  type RecentRow = { name: string; place: string; committed_at: string | Date };
+  const recent = ((recentRows.rows ?? recentRows) as unknown as RecentRow[]).map((r) => {
+    const t = r.committed_at instanceof Date ? r.committed_at : new Date(r.committed_at);
+    return {
+      name: r.name || "Anonymous",
+      place: r.place || "",
+      count: 1,
+      ago: humanAgo(t.getTime()),
+      committedAt: t.toISOString(),
+    };
+  });
+
+  type TopRow = { name: string; place: string; count: bigint | number; joined: string | Date };
+  const top = ((topRows.rows ?? topRows) as unknown as TopRow[]).map((r) => {
+    const joinedDate = r.joined instanceof Date ? r.joined : new Date(r.joined);
+    return {
+      name: r.place ? `${r.name} · ${r.place}` : r.name,
+      count: Number(r.count),
+      joined: joinedDate.toLocaleString("en-US", { month: "short", day: "2-digit" }),
+    };
+  });
+
+  type CountryRow = { country: string; count: bigint | number };
+  const countries = ((countryRows.rows ?? countryRows) as unknown as CountryRow[]).map((r) => ({
+    country: r.country,
+    count: Number(r.count),
+  }));
+
+  return {
+    koti,
+    uniqueWriters,
+    countriesActive,
+    recentWriters: recent,
+    topWriters: top,
+    countries,
+  };
+}
+
+/// Append N entries to the shared koti. Atomic UPDATE caps `current_count`
+/// at `target_count` — once the 1 crore ceiling is hit, the route returns
+/// 410 koti_complete on next call.
+export async function appendSharedEntries(input: SharedAppendInput): Promise<SharedAppendResult> {
+  const desiredCount = input.cadenceFingerprints.length;
+  if (desiredCount === 0) throw new Error("appendSharedEntries: empty batch");
+
+  if (isTest()) {
+    const mem = sharedMemStore();
+    const koti = await getActiveSharedKoti();
+    const before = koti.currentCount;
+    const newCount = Math.min(before + desiredCount, koti.targetCount);
+    const acceptedHere = newCount - before;
+    if (mem.koti) mem.koti.currentCount = newCount;
+    for (let i = 0; i < acceptedHere; i += 1) {
+      mem.entries.push({
+        deviceId: input.deviceId,
+        displayName: input.displayName,
+        place: input.place,
+        country: input.country,
+        cadenceSignature: input.cadenceFingerprints[i] ?? "",
+        flagged: input.flagged[i] ?? false,
+        committedAt: new Date().toISOString(),
+      });
+    }
+    return {
+      acceptedHere,
+      currentCount: newCount,
+      remaining: koti.targetCount - newCount,
+      complete: newCount >= koti.targetCount,
+    };
+  }
+
+  const db = getDb();
+  const koti = await getActiveSharedKoti();
+
+  const updated = await db
+    .update(schema.sharedKotis)
+    .set({
+      currentCount: sql`LEAST(current_count + ${desiredCount}, target_count)`,
+      updatedAt: sql`NOW()`,
+    })
+    .where(eq(schema.sharedKotis.id, koti.id))
+    .returning({ currentCount: schema.sharedKotis.currentCount });
+
+  const after = updated[0] ? Number(updated[0].currentCount) : koti.currentCount;
+  const acceptedHere = after - koti.currentCount;
+  if (acceptedHere <= 0) {
+    return { acceptedHere: 0, currentCount: after, remaining: 0, complete: after >= koti.targetCount };
+  }
+
+  await db.insert(schema.sharedEntries).values(
+    Array.from({ length: acceptedHere }).map((_, i) => ({
+      sharedKotiId: koti.id,
+      deviceId: input.deviceId,
+      displayName: input.displayName,
+      place: input.place,
+      country: input.country,
+      cadenceSignature: input.cadenceFingerprints[i] ?? "",
+      flagged: input.flagged[i] ?? false,
+    })),
+  );
+
+  return {
+    acceptedHere,
+    currentCount: after,
+    remaining: koti.targetCount - after,
+    complete: after >= koti.targetCount,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Test in-memory store for shared koti
+// ─────────────────────────────────────────────────────────────────────────────
+
+type SharedMem = {
+  koti: SharedKotiRow | null;
+  entries: {
+    deviceId: string;
+    displayName: string | null;
+    place: string | null;
+    country: string | null;
+    cadenceSignature: string;
+    flagged: boolean;
+    committedAt: string;
+  }[];
+};
+
+function sharedMemStore(): SharedMem {
+  const g = globalThis as unknown as { __likhitaSharedMem?: SharedMem };
+  if (!g.__likhitaSharedMem) {
+    g.__likhitaSharedMem = { koti: null, entries: [] };
+  }
+  return g.__likhitaSharedMem;
+}
+
+function humanAgo(timestampMs: number): string {
+  const diffSec = Math.max(0, Math.floor((Date.now() - timestampMs) / 1000));
+  if (diffSec < 60) return `${diffSec}s`;
+  const diffMin = Math.floor(diffSec / 60);
+  if (diffMin < 60) return `${diffMin}m`;
+  const diffHr = Math.floor(diffMin / 60);
+  if (diffHr < 24) return `${diffHr}h`;
+  return `${Math.floor(diffHr / 24)}d`;
 }

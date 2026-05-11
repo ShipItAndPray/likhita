@@ -3,21 +3,24 @@ import KotiCore
 import KotiThemes
 
 /// "Many Hands" — leaderboard of top contributors + countries breakdown +
-/// custodianship note. Always presented as a sheet from the Shared hub.
+/// custodianship note. Data comes from the live snapshot in
+/// `SharedKotiViewModel.snapshot`.
 public struct SharedWritersView: View {
     let tradition: TraditionContent
     let theme: any Theme
+    @Bindable var vm: SharedKotiViewModel
     let onClose: () -> Void
 
-    public init(tradition: TraditionContent, theme: any Theme, onClose: @escaping () -> Void) {
+    public init(tradition: TraditionContent, theme: any Theme, vm: SharedKotiViewModel, onClose: @escaping () -> Void) {
         self.tradition = tradition
         self.theme = theme
+        self.vm = vm
         self.onClose = onClose
     }
 
-    private var k: SharedKoti { SharedKotiCatalog.sample }
+    private var snap: LikhitaService.SharedHubSnapshot? { vm.snapshot }
     private var totalCountries: Int {
-        SharedKotiCatalog.countries.reduce(0) { $0 + $1.count }
+        (snap?.countries ?? []).reduce(0) { $0 + $1.count }
     }
 
     public var body: some View {
@@ -41,6 +44,8 @@ public struct SharedWritersView: View {
             }
         }
         .foregroundStyle(theme.textPrimary)
+        .task { vm.startPolling() }
+        .onDisappear { vm.stopPolling() }
     }
 
     private var header: some View {
@@ -64,10 +69,12 @@ public struct SharedWritersView: View {
     }
 
     private var countTitle: some View {
-        Group {
-            Text(formatted(Int64(k.uniqueWriters))) +
+        let writers = snap?.uniqueWriters ?? 0
+        let countries = snap?.countriesActive ?? 0
+        return Group {
+            Text(formatted(Int64(writers))) +
             Text(" devotees across ").font(.custom("EB Garamond", size: 14)).foregroundColor(.gray) +
-            Text("\(k.countriesActive)") +
+            Text("\(countries)") +
             Text(" countries").font(.custom("EB Garamond", size: 14)).foregroundColor(.gray)
         }
         .font(.custom("EB Garamond", size: 22))
@@ -75,46 +82,59 @@ public struct SharedWritersView: View {
     }
 
     private var topHands: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        let writers = snap?.topWriters ?? []
+        return VStack(alignment: .leading, spacing: 8) {
             Text("MOST GENEROUS HANDS")
                 .font(.system(size: 10))
                 .kerning(1.6)
                 .foregroundStyle(theme.textPrimary.opacity(0.55))
 
             VStack(spacing: 0) {
-                ForEach(Array(SharedKotiCatalog.topWriters.enumerated()), id: \.offset) { i, w in
-                    HStack {
-                        HStack(spacing: 12) {
-                            ZStack {
-                                Circle()
-                                    .fill(theme.foil.opacity(0.13))
-                                    .frame(width: 24, height: 24)
-                                Text("\(i + 1)")
-                                    .font(.custom("EB Garamond", size: 11))
-                                    .foregroundStyle(theme.cloth)
+                if writers.isEmpty {
+                    Text("No hands yet. Be the first.")
+                        .font(.custom("EB Garamond", size: 13))
+                        .italic()
+                        .foregroundStyle(theme.textPrimary.opacity(0.5))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 14)
+                } else {
+                    ForEach(Array(writers.enumerated()), id: \.offset) { i, w in
+                        HStack {
+                            HStack(spacing: 12) {
+                                ZStack {
+                                    Circle()
+                                        .fill(theme.foil.opacity(0.13))
+                                        .frame(width: 24, height: 24)
+                                    Text("\(i + 1)")
+                                        .font(.custom("EB Garamond", size: 11))
+                                        .foregroundStyle(theme.cloth)
+                                }
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(w.name)
+                                        .font(.custom("EB Garamond", size: 14))
+                                        .foregroundStyle(theme.textPrimary)
+                                    if !w.joined.isEmpty {
+                                        Text("since \(w.joined)")
+                                            .font(.system(size: 10))
+                                            .foregroundStyle(theme.textPrimary.opacity(0.55))
+                                    }
+                                }
                             }
-                            VStack(alignment: .leading, spacing: 1) {
-                                Text(w.name)
-                                    .font(.custom("EB Garamond", size: 14))
-                                    .foregroundStyle(theme.textPrimary)
-                                Text("since \(w.joined)")
-                                    .font(.system(size: 10))
-                                    .foregroundStyle(theme.textPrimary.opacity(0.55))
-                            }
+                            Spacer()
+                            Text(formatted(Int64(w.count)))
+                                .font(.custom("EB Garamond", size: 16))
+                                .foregroundStyle(theme.textPrimary)
                         }
-                        Spacer()
-                        Text(formatted(Int64(w.count)))
-                            .font(.custom("EB Garamond", size: 16))
-                            .foregroundStyle(theme.textPrimary)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 12)
+                        .overlay(
+                            Rectangle()
+                                .fill(.black.opacity(i == 0 ? 0 : 0.07))
+                                .frame(height: 0.5),
+                            alignment: .top
+                        )
                     }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 12)
-                    .overlay(
-                        Rectangle()
-                            .fill(.black.opacity(i == 0 ? 0 : 0.07))
-                            .frame(height: 0.5),
-                        alignment: .top
-                    )
                 }
             }
             .background(theme.page)
@@ -132,41 +152,51 @@ public struct SharedWritersView: View {
     }
 
     private var countries: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        let list = snap?.countries ?? []
+        return VStack(alignment: .leading, spacing: 8) {
             Text("FROM ACROSS THE WORLD")
                 .font(.system(size: 10))
                 .kerning(1.6)
                 .foregroundStyle(theme.textPrimary.opacity(0.55))
 
             VStack(spacing: 0) {
-                ForEach(Array(SharedKotiCatalog.countries.enumerated()), id: \.offset) { i, c in
-                    let w = totalCountries > 0 ? Double(c.count) / Double(totalCountries) : 0
-                    VStack(spacing: 4) {
-                        HStack {
-                            Text(c.country)
-                            Spacer()
-                            Text(formatted(Int64(c.count)))
-                                .foregroundStyle(theme.textPrimary.opacity(0.65))
+                if list.isEmpty {
+                    Text("No country data yet.")
+                        .font(.custom("EB Garamond", size: 13))
+                        .italic()
+                        .foregroundStyle(theme.textPrimary.opacity(0.5))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 10)
+                } else {
+                    ForEach(Array(list.enumerated()), id: \.offset) { i, c in
+                        let w = totalCountries > 0 ? Double(c.count) / Double(totalCountries) : 0
+                        VStack(spacing: 4) {
+                            HStack {
+                                Text(c.country)
+                                Spacer()
+                                Text(formatted(Int64(c.count)))
+                                    .foregroundStyle(theme.textPrimary.opacity(0.65))
+                            }
+                            .font(.system(size: 12))
+                            Capsule()
+                                .fill(.black.opacity(0.06))
+                                .frame(height: 3)
+                                .overlay(
+                                    GeometryReader { g in
+                                        Capsule()
+                                            .fill(theme.cloth)
+                                            .frame(width: g.size.width * w, height: 3)
+                                    }
+                                )
                         }
-                        .font(.system(size: 12))
-                        Capsule()
-                            .fill(.black.opacity(0.06))
-                            .frame(height: 3)
-                            .overlay(
-                                GeometryReader { g in
-                                    Capsule()
-                                        .fill(theme.cloth)
-                                        .frame(width: g.size.width * w, height: 3)
-                                }
-                            )
+                        .padding(.vertical, 6)
+                        .overlay(
+                            Rectangle()
+                                .fill(.black.opacity(i == 0 ? 0 : 0.06))
+                                .frame(height: 0.5),
+                            alignment: .top
+                        )
                     }
-                    .padding(.vertical, 6)
-                    .overlay(
-                        Rectangle()
-                            .fill(.black.opacity(i == 0 ? 0 : 0.06))
-                            .frame(height: 0.5),
-                        alignment: .top
-                    )
                 }
             }
             .padding(.horizontal, 14)
@@ -181,14 +211,17 @@ public struct SharedWritersView: View {
     }
 
     private var custodianship: some View {
-        HStack(alignment: .top, spacing: 12) {
+        let custodian = snap?.koti.custodian ?? "Likhita Foundation"
+        let destination = snap?.koti.destination ?? "Sri Sita Ramachandra Swamy Temple, Bhadrachalam"
+        let shipDate = snap?.koti.estimatedShipDate ?? "Vaikuntha Ekadashi · Dec 31, 2026"
+        return HStack(alignment: .top, spacing: 12) {
             SriYantra(foil: theme.foil, size: 32)
             VStack(alignment: .leading, spacing: 4) {
                 Text("CUSTODIANSHIP")
                     .font(.system(size: 10))
                     .kerning(1.6)
                     .foregroundStyle(theme.page.opacity(0.75))
-                Text("\(k.custodian) holds the ledger in trust. When the koti completes, the bound book travels to \(k.destination.components(separatedBy: ",").first ?? "Bhadrachalam") on \(k.estimatedShipDate.components(separatedBy: "·").first?.trimmingCharacters(in: .whitespaces) ?? k.estimatedShipDate).")
+                Text("\(custodian) holds the ledger in trust. When the koti completes, the bound book travels to \(destination.components(separatedBy: ",").first ?? destination) on \(shipDate.components(separatedBy: "·").first?.trimmingCharacters(in: .whitespaces) ?? shipDate).")
                     .font(.custom("EB Garamond", size: 13))
                     .foregroundStyle(theme.page.opacity(0.9))
                     .lineSpacing(3)

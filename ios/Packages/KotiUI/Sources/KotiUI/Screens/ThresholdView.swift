@@ -4,18 +4,19 @@ import KotiThemes
 
 /// The Threshold — the app's true home. The user picks where they write
 /// today: their own bound book ("My Book"), or the communal append-only
-/// ledger ("The Sangha"). Each card animates a live progress bar.
+/// ledger ("The Sangha"). Sangha values come from the live
+/// `SharedKotiViewModel.snapshot`.
 public struct ThresholdView: View {
     let tradition: TraditionContent
     let theme: any Theme
     let sanghaTheme: any Theme
     let myCount: Int64
     let myTarget: Int64
-    let sangha: SharedKoti
+    @Bindable var sangha: SharedKotiViewModel
     let onEnterMine: () -> Void
     let onEnterSangha: () -> Void
 
-    @State private var sanghaNudge: Int64 = 0
+    @State private var sanghaTick: Int = 0
 
     public init(
         tradition: TraditionContent,
@@ -23,7 +24,7 @@ public struct ThresholdView: View {
         sanghaTheme: any Theme,
         myCount: Int64,
         myTarget: Int64,
-        sangha: SharedKoti = SharedKotiCatalog.sample,
+        sangha: SharedKotiViewModel,
         onEnterMine: @escaping () -> Void,
         onEnterSangha: @escaping () -> Void
     ) {
@@ -41,10 +42,13 @@ public struct ThresholdView: View {
         guard myTarget > 0 else { return 0 }
         return Double(myCount) / Double(myTarget)
     }
-    private var sanghaLive: Int64 { sangha.count + sanghaNudge }
+    private var snap: LikhitaService.SharedHubSnapshot? { sangha.snapshot }
+    private var sanghaCount: Int64 { Int64(snap?.koti.currentCount ?? 0) }
+    private var sanghaTarget: Int64 { Int64(snap?.koti.targetCount ?? 10_000_000) }
+    private var sanghaWriters: Int { snap?.uniqueWriters ?? 0 }
     private var sanghaPct: Double {
-        guard sangha.target > 0 else { return 0 }
-        return Double(sanghaLive) / Double(sangha.target)
+        guard sanghaTarget > 0 else { return 0 }
+        return Double(sanghaCount) / Double(sanghaTarget)
     }
 
     public var body: some View {
@@ -84,7 +88,12 @@ public struct ThresholdView: View {
             }
         }
         .foregroundStyle(theme.textPrimary)
-        .onAppear { startSanghaNudge() }
+        .task {
+            sangha.startPolling()
+        }
+        .onDisappear {
+            sangha.stopPolling()
+        }
     }
 
     private var header: some View {
@@ -216,7 +225,10 @@ public struct ThresholdView: View {
                         .foregroundStyle(sanghaTheme.foil)
                         .padding(.top, 4)
 
-                    Text("One book. \(formatted(Int64(sangha.uniqueWriters))) hands. Append-only — once written, never erased.")
+                    Text(sanghaWriters > 0
+                         ? "One book. \(formatted(Int64(sanghaWriters))) hands. Append-only — once written, never erased."
+                         : "One book. Append-only — once written, never erased."
+                    )
                         .font(.custom("EB Garamond", size: 12))
                         .italic()
                         .foregroundStyle(sanghaTheme.page.opacity(0.78))
@@ -225,7 +237,7 @@ public struct ThresholdView: View {
 
                     VStack(spacing: 4) {
                         HStack {
-                            Text("\(formatted(sanghaLive)) of 1 crore")
+                            Text("\(formatted(sanghaCount)) of 1 crore")
                             Spacer()
                             Text("\(String(format: "%.2f", sanghaPct * 100))%")
                         }
@@ -245,7 +257,7 @@ public struct ThresholdView: View {
                                             )
                                         )
                                         .frame(width: g.size.width * sanghaPct, height: 3)
-                                        .animation(.linear(duration: 1.4), value: sanghaLive)
+                                        .animation(.linear(duration: 1.4), value: sanghaCount)
                                 }
                             )
                     }
@@ -271,17 +283,6 @@ public struct ThresholdView: View {
             .shadow(color: .black.opacity(0.18), radius: 16, x: 0, y: 8)
         }
         .buttonStyle(.plain)
-    }
-
-    private func startSanghaNudge() {
-        Task {
-            while true {
-                try? await Task.sleep(nanoseconds: 1_500_000_000)
-                await MainActor.run {
-                    sanghaNudge += Int64.random(in: 2...10)
-                }
-            }
-        }
     }
 
     private func formatted(_ n: Int64) -> String {

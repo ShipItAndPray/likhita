@@ -19,6 +19,7 @@ public struct RootView: View {
     @State private var form = SankalpamForm()
     @State private var session: KotiSession
     @State private var viewModel: KotiViewModel
+    @State private var sharedVM: SharedKotiViewModel
     @State private var didTryResume: Bool = false
 
     public init(config: any AppConfiguration) {
@@ -54,6 +55,11 @@ public struct RootView: View {
             service: service,
             store: store,
             initialSession: initialSession,
+            mantraTyped: mantraTyped
+        ))
+        _sharedVM = State(initialValue: SharedKotiViewModel(
+            service: service,
+            store: store,
             mantraTyped: mantraTyped
         ))
 
@@ -130,9 +136,8 @@ public struct RootView: View {
                 sanghaTheme: sanghaTheme,
                 myCount: session.count,
                 myTarget: session.target,
+                sangha: sharedVM,
                 onEnterMine: {
-                    // If user has never started a koti, walk the sankalpam.
-                    // Otherwise drop straight back into writing.
                     if viewModel.serverKotiId == nil {
                         route = .welcome
                     } else {
@@ -145,6 +150,7 @@ public struct RootView: View {
             SharedHubView(
                 tradition: tradition,
                 theme: sanghaTheme,
+                vm: sharedVM,
                 onWrite: { route = .sharedWrite },
                 onOpenWriters: { route = .sharedHands },
                 onClose: { route = .threshold }
@@ -153,12 +159,14 @@ public struct RootView: View {
             SharedWritingView(
                 tradition: tradition,
                 theme: theme,
+                vm: sharedVM,
                 onClose: { route = .sharedHub }
             )
         case .sharedHands:
             SharedWritersView(
                 tradition: tradition,
                 theme: sanghaTheme,
+                vm: sharedVM,
                 onClose: { route = .sharedHub }
             )
         case .welcome:
