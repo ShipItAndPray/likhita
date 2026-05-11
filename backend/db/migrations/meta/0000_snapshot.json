@@ -1,12 +1,12 @@
 {
-  "id": "ff7ef4c5-791b-4b66-858d-07ca5773a66a",
+  "id": "271ee785-2699-4022-8723-208ad35cd92c",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
-    "public.devices": {
+    "likhita.devices": {
       "name": "devices",
-      "schema": "",
+      "schema": "likhita",
       "columns": {
         "id": {
           "name": "id",
@@ -47,6 +47,7 @@
           "name": "devices_user_id_users_id_fk",
           "tableFrom": "devices",
           "tableTo": "users",
+          "schemaTo": "likhita",
           "columnsFrom": [
             "user_id"
           ],
@@ -63,9 +64,9 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.entries": {
+    "likhita.entries": {
       "name": "entries",
-      "schema": "",
+      "schema": "likhita",
       "columns": {
         "id": {
           "name": "id",
@@ -140,6 +141,7 @@
           "name": "entries_koti_id_kotis_id_fk",
           "tableFrom": "entries",
           "tableTo": "kotis",
+          "schemaTo": "likhita",
           "columnsFrom": [
             "koti_id"
           ],
@@ -165,9 +167,9 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.idempotency_keys": {
+    "likhita.idempotency_keys": {
       "name": "idempotency_keys",
-      "schema": "",
+      "schema": "likhita",
       "columns": {
         "koti_id": {
           "name": "koti_id",
@@ -207,6 +209,7 @@
           "name": "idempotency_keys_koti_id_kotis_id_fk",
           "tableFrom": "idempotency_keys",
           "tableTo": "kotis",
+          "schemaTo": "likhita",
           "columnsFrom": [
             "koti_id"
           ],
@@ -231,9 +234,9 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.koti_ship_batches": {
+    "likhita.koti_ship_batches": {
       "name": "koti_ship_batches",
-      "schema": "",
+      "schema": "likhita",
       "columns": {
         "koti_id": {
           "name": "koti_id",
@@ -272,6 +275,7 @@
           "name": "koti_ship_batches_koti_id_kotis_id_fk",
           "tableFrom": "koti_ship_batches",
           "tableTo": "kotis",
+          "schemaTo": "likhita",
           "columnsFrom": [
             "koti_id"
           ],
@@ -285,6 +289,7 @@
           "name": "koti_ship_batches_batch_id_ship_batches_id_fk",
           "tableFrom": "koti_ship_batches",
           "tableTo": "ship_batches",
+          "schemaTo": "likhita",
           "columnsFrom": [
             "batch_id"
           ],
@@ -309,9 +314,9 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.kotis": {
+    "likhita.kotis": {
       "name": "kotis",
-      "schema": "",
+      "schema": "likhita",
       "columns": {
         "id": {
           "name": "id",
@@ -511,6 +516,7 @@
           "name": "kotis_user_id_users_id_fk",
           "tableFrom": "kotis",
           "tableTo": "users",
+          "schemaTo": "likhita",
           "columnsFrom": [
             "user_id"
           ],
@@ -527,9 +533,9 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.payments": {
+    "likhita.payments": {
       "name": "payments",
-      "schema": "",
+      "schema": "likhita",
       "columns": {
         "id": {
           "name": "id",
@@ -601,6 +607,7 @@
           "name": "payments_user_id_users_id_fk",
           "tableFrom": "payments",
           "tableTo": "users",
+          "schemaTo": "likhita",
           "columnsFrom": [
             "user_id"
           ],
@@ -614,6 +621,7 @@
           "name": "payments_koti_id_kotis_id_fk",
           "tableFrom": "payments",
           "tableTo": "kotis",
+          "schemaTo": "likhita",
           "columnsFrom": [
             "koti_id"
           ],
@@ -630,9 +638,9 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.ship_batches": {
+    "likhita.ship_batches": {
       "name": "ship_batches",
-      "schema": "",
+      "schema": "likhita",
       "columns": {
         "id": {
           "name": "id",
@@ -699,9 +707,9 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.users": {
+    "likhita.users": {
       "name": "users",
-      "schema": "",
+      "schema": "likhita",
       "columns": {
         "id": {
           "name": "id",
@@ -790,7 +798,9 @@
     }
   },
   "enums": {},
-  "schemas": {},
+  "schemas": {
+    "likhita": "likhita"
+  },
   "sequences": {},
   "roles": {},
   "policies": {},

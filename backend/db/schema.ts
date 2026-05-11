@@ -1,5 +1,5 @@
 import {
-  pgTable,
+  pgSchema,
   uuid,
   text,
   bigint,
@@ -11,6 +11,14 @@ import {
   unique,
   primaryKey,
 } from "drizzle-orm/pg-core";
+
+// All Likhita tables live in a dedicated Postgres schema. This isolates them
+// from any other project that happens to share the same Neon database
+// (specifically: chain911 owns the `public` schema in the shared instance).
+// `pgSchema("likhita")` makes every table reference resolve to `likhita.<name>`
+// without sprinkling the namespace through every query.
+export const likhitaSchema = pgSchema("likhita");
+const pgTable = likhitaSchema.table.bind(likhitaSchema);
 
 // X-App-Origin values used across tables. Kept as TEXT in DB to allow future apps
 // without a schema migration; validated at the route layer with Zod.

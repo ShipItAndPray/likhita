@@ -3,7 +3,7 @@ import { z } from "zod";
 import { readAppOrigin } from "@/lib/app-origin";
 import { requireAuth } from "@/lib/auth";
 import { handleError, jsonError } from "@/lib/http";
-import { createKoti, findUserByClerkId, listKotisForUser } from "@/lib/repo";
+import { createKoti, findUserByClerkId, listKotisForUser, upsertUser } from "@/lib/repo";
 
 export const runtime = "nodejs";
 
@@ -42,8 +42,20 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       );
     }
 
-    const user = await findUserByClerkId(auth.clerkId);
-    const userId = user?.id ?? auth.clerkId;
+    // Auto-create a stub user on first koti POST so iOS clients don't need
+    // to call /v1/auth/sync first. The user enriches their profile later via
+    // sync; until then we have a usable UUID foreign key and a placeholder
+    // name/email tied to the Clerk identity.
+    let user = await findUserByClerkId(auth.clerkId);
+    if (!user) {
+      user = await upsertUser({
+        clerkId: auth.clerkId,
+        name: "A devotee",
+        email: `${auth.clerkId}@placeholder.likhita.org`,
+        appOrigin,
+      });
+    }
+    const userId = user.id;
 
     const koti = await createKoti({
       userId,
@@ -71,9 +83,9 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     const appOrigin = readAppOrigin(req.headers);
     const auth = await requireAuth(req);
     const user = await findUserByClerkId(auth.clerkId);
-    const userId = user?.id ?? auth.clerkId;
-    const kotis = await listKotisForUser(userId, appOrigin);
-    return NextResponse.json({ kotis, appOrigin, userId });
+    if (!user) return NextResponse.json({ kotis: [], appOrigin });
+    const kotis = await listKotisForUser(user.id, appOrigin);
+    return NextResponse.json({ kotis, appOrigin, userId: user.id });
   } catch (err) {
     return handleError(err);
   }

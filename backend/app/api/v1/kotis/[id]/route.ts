@@ -23,8 +23,7 @@ export async function GET(
       return jsonError(404, "not_found", "Koti does not exist");
     }
     const user = await findUserByClerkId(auth.clerkId);
-    const userId = user?.id ?? auth.clerkId;
-    if (koti.userId !== userId) {
+    if (!user || koti.userId !== user.id) {
       return jsonError(403, "forbidden", "You do not own this koti");
     }
     return NextResponse.json({ koti });

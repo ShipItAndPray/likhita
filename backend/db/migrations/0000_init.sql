@@ -1,4 +1,6 @@
-CREATE TABLE "devices" (
+CREATE SCHEMA "likhita";
+--> statement-breakpoint
+CREATE TABLE "likhita"."devices" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"user_id" uuid NOT NULL,
 	"apns_token" text NOT NULL,
@@ -6,7 +8,7 @@ CREATE TABLE "devices" (
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE "entries" (
+CREATE TABLE "likhita"."entries" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"koti_id" uuid NOT NULL,
 	"sequence_number" bigint NOT NULL,
@@ -17,7 +19,7 @@ CREATE TABLE "entries" (
 	CONSTRAINT "entries_unique_seq" UNIQUE("koti_id","sequence_number")
 );
 --> statement-breakpoint
-CREATE TABLE "idempotency_keys" (
+CREATE TABLE "likhita"."idempotency_keys" (
 	"koti_id" uuid NOT NULL,
 	"key" text NOT NULL,
 	"request_hash" text NOT NULL,
@@ -26,7 +28,7 @@ CREATE TABLE "idempotency_keys" (
 	CONSTRAINT "idempotency_keys_koti_id_key_pk" PRIMARY KEY("koti_id","key")
 );
 --> statement-breakpoint
-CREATE TABLE "koti_ship_batches" (
+CREATE TABLE "likhita"."koti_ship_batches" (
 	"koti_id" uuid NOT NULL,
 	"batch_id" uuid NOT NULL,
 	"position_in_batch" integer,
@@ -35,7 +37,7 @@ CREATE TABLE "koti_ship_batches" (
 	CONSTRAINT "koti_ship_batches_koti_id_batch_id_pk" PRIMARY KEY("koti_id","batch_id")
 );
 --> statement-breakpoint
-CREATE TABLE "kotis" (
+CREATE TABLE "likhita"."kotis" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"user_id" uuid NOT NULL,
 	"app_origin" text NOT NULL,
@@ -66,7 +68,7 @@ CREATE TABLE "kotis" (
 	"receipt_url" text
 );
 --> statement-breakpoint
-CREATE TABLE "payments" (
+CREATE TABLE "likhita"."payments" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"user_id" uuid NOT NULL,
 	"koti_id" uuid,
@@ -79,7 +81,7 @@ CREATE TABLE "payments" (
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE "ship_batches" (
+CREATE TABLE "likhita"."ship_batches" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"batch_quarter" text NOT NULL,
 	"temple_destination" text NOT NULL,
@@ -91,7 +93,7 @@ CREATE TABLE "ship_batches" (
 	"receipt_url" text
 );
 --> statement-breakpoint
-CREATE TABLE "users" (
+CREATE TABLE "likhita"."users" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"clerk_id" text NOT NULL,
 	"name" text NOT NULL,
@@ -106,13 +108,13 @@ CREATE TABLE "users" (
 	CONSTRAINT "users_clerk_id_unique" UNIQUE("clerk_id")
 );
 --> statement-breakpoint
-ALTER TABLE "devices" ADD CONSTRAINT "devices_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "entries" ADD CONSTRAINT "entries_koti_id_kotis_id_fk" FOREIGN KEY ("koti_id") REFERENCES "public"."kotis"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "idempotency_keys" ADD CONSTRAINT "idempotency_keys_koti_id_kotis_id_fk" FOREIGN KEY ("koti_id") REFERENCES "public"."kotis"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "koti_ship_batches" ADD CONSTRAINT "koti_ship_batches_koti_id_kotis_id_fk" FOREIGN KEY ("koti_id") REFERENCES "public"."kotis"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "koti_ship_batches" ADD CONSTRAINT "koti_ship_batches_batch_id_ship_batches_id_fk" FOREIGN KEY ("batch_id") REFERENCES "public"."ship_batches"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "kotis" ADD CONSTRAINT "kotis_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "payments" ADD CONSTRAINT "payments_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "payments" ADD CONSTRAINT "payments_koti_id_kotis_id_fk" FOREIGN KEY ("koti_id") REFERENCES "public"."kotis"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
-CREATE INDEX "entries_koti_seq" ON "entries" USING btree ("koti_id","sequence_number");--> statement-breakpoint
-CREATE INDEX "kotis_user" ON "kotis" USING btree ("user_id");
+ALTER TABLE "likhita"."devices" ADD CONSTRAINT "devices_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "likhita"."users"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "likhita"."entries" ADD CONSTRAINT "entries_koti_id_kotis_id_fk" FOREIGN KEY ("koti_id") REFERENCES "likhita"."kotis"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "likhita"."idempotency_keys" ADD CONSTRAINT "idempotency_keys_koti_id_kotis_id_fk" FOREIGN KEY ("koti_id") REFERENCES "likhita"."kotis"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "likhita"."koti_ship_batches" ADD CONSTRAINT "koti_ship_batches_koti_id_kotis_id_fk" FOREIGN KEY ("koti_id") REFERENCES "likhita"."kotis"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "likhita"."koti_ship_batches" ADD CONSTRAINT "koti_ship_batches_batch_id_ship_batches_id_fk" FOREIGN KEY ("batch_id") REFERENCES "likhita"."ship_batches"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "likhita"."kotis" ADD CONSTRAINT "kotis_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "likhita"."users"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "likhita"."payments" ADD CONSTRAINT "payments_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "likhita"."users"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "likhita"."payments" ADD CONSTRAINT "payments_koti_id_kotis_id_fk" FOREIGN KEY ("koti_id") REFERENCES "likhita"."kotis"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+CREATE INDEX "entries_koti_seq" ON "likhita"."entries" USING btree ("koti_id","sequence_number");--> statement-breakpoint
+CREATE INDEX "kotis_user" ON "likhita"."kotis" USING btree ("user_id");

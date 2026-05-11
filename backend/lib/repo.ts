@@ -176,6 +176,7 @@ export async function upsertUser(input: UpsertUserInput): Promise<UserRow> {
       })
       .returning();
     const row = inserted[0];
+    if (!row) throw new Error("upsertUser: insert returned no rows");
     return {
       id: row.id,
       clerkId: row.clerkId,
@@ -187,6 +188,7 @@ export async function upsertUser(input: UpsertUserInput): Promise<UserRow> {
   }
 
   const current = existing[0];
+  if (!current) throw new Error("upsertUser: existing lookup returned no rows");
   const linked = new Set(current.linkedApps ?? []);
   linked.add(input.appOrigin);
   await db
@@ -229,8 +231,8 @@ export async function findUserByClerkId(clerkId: string): Promise<UserRow | null
     .from(schema.users)
     .where(eq(schema.users.clerkId, clerkId))
     .limit(1);
-  if (rows.length === 0) return null;
   const r = rows[0];
+  if (!r) return null;
   return {
     id: r.id, clerkId: r.clerkId, name: r.name, email: r.email,
     primaryApp: r.primaryApp, linkedApps: r.linkedApps ?? [],
@@ -315,7 +317,9 @@ export async function createKoti(input: CreateKotiInput): Promise<KotiRow> {
       dedicationTo: input.dedicationTo,
     })
     .returning();
-  return kotiRowFromDb(inserted[0]);
+  const row = inserted[0];
+  if (!row) throw new Error("createKoti: insert returned no rows");
+  return kotiRowFromDb(row);
 }
 
 export async function listKotisForUser(userId: string, appOrigin: AppOrigin): Promise<KotiRow[]> {
@@ -338,8 +342,9 @@ export async function getKotiById(id: string): Promise<KotiRow | null> {
   }
   const db = getDb();
   const rows = await db.select().from(schema.kotis).where(eq(schema.kotis.id, id)).limit(1);
-  if (rows.length === 0) return null;
-  return kotiRowFromDb(rows[0]);
+  const r = rows[0];
+  if (!r) return null;
+  return kotiRowFromDb(r);
 }
 
 export async function getRecentForKoti(kotiId: string): Promise<RecentSnapshot> {
@@ -383,8 +388,9 @@ export async function lookupIdempotency(kotiId: string, key: string): Promise<Id
     .from(schema.idempotencyKeys)
     .where(and(eq(schema.idempotencyKeys.kotiId, kotiId), eq(schema.idempotencyKeys.key, key)))
     .limit(1);
-  if (rows.length === 0) return null;
-  return { hash: rows[0].requestHash, response: rows[0].responseJson };
+  const r = rows[0];
+  if (!r) return null;
+  return { hash: r.requestHash, response: r.responseJson };
 }
 
 export async function storeIdempotency(
@@ -459,7 +465,8 @@ export async function commitEntries(input: CommitEntriesInput): Promise<CommitEn
     )
     .returning({ currentCount: schema.kotis.currentCount });
 
-  if (updated.length === 0) {
+  const updatedRow = updated[0];
+  if (!updatedRow) {
     return { ok: false, reason: "concurrent_update" };
   }
 
@@ -476,5 +483,5 @@ export async function commitEntries(input: CommitEntriesInput): Promise<CommitEn
     );
   }
 
-  return { ok: true, currentCount: Number(updated[0].currentCount) };
+  return { ok: true, currentCount: Number(updatedRow.currentCount) };
 }
