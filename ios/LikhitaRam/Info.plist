@@ -29,12 +29,6 @@
   <key>LSRequiresIPhoneOS</key><true/>
   <key>UIRequiresFullScreen</key><true/>
 
-  <key>UIDeviceFamily</key>
-  <array>
-    <integer>1</integer>
-    <integer>2</integer>
-  </array>
-
   <key>UISupportedInterfaceOrientations</key>
   <array>
     <string>UIInterfaceOrientationPortrait</string>

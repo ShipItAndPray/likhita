@@ -3,8 +3,9 @@
 <!--
   Likhita Rama (Telugu) Info.plist.
   Critical keys explained:
-  - UIRequiresFullScreen + UIDeviceFamily=[1,2] + four iPad orientations
-    defends against ITMS-90474 while shipping universal.
+  - UIRequiresFullScreen + four iPad orientations defends against ITMS-90474
+    while shipping universal. Device family comes from TARGETED_DEVICE_FAMILY
+    in project.yml — never set UIDeviceFamily here (Xcode warns + overwrites).
   - ITSAppUsesNonExemptEncryption=false skips export compliance prompt.
   - LIKHITA_API_BASE pulled from xcodegen build setting per-config.
 -->
@@ -33,12 +34,6 @@
 
   <key>LSRequiresIPhoneOS</key><true/>
   <key>UIRequiresFullScreen</key><true/>
-
-  <key>UIDeviceFamily</key>
-  <array>
-    <integer>1</integer>
-    <integer>2</integer>
-  </array>
 
   <key>UISupportedInterfaceOrientations</key>
   <array>

@@ -27,11 +27,12 @@ Created on 2026-05-06 via persistent-Chrome CDP automation. Both bundle IDs regi
 
 | App | Workflow | Branch (start condition) | Status |
 |---|---|---|---|
-| Likhita Rama (`6766999832`) | "Default" | `main` | ✅ created, no build yet |
-| Likhita Ram (`6766999936`) | "Default" | `main` | ✅ created, no build yet |
+| Likhita Rama (`6766999832`) | "Default" | `release` | ✅ Distribution Preparation = TestFlight Internal Only |
+| Likhita Ram (`6766999936`) | "Default" | `release` | ✅ Distribution Preparation = TestFlight Internal Only |
 
-To trigger first build: push any commit to `main` and Xcode Cloud will pick it up.
-To switch to `release` branch start condition: ASC → app → Xcode Cloud → Manage Workflows → Default → Edit → Start Conditions → Branch Changes → `release`.
+**Rule:** only `release` branch pushes trigger Cloud builds. `main` is for development; merge to `release` only when you want a TestFlight build. See SKILL.md §6 for rationale.
+
+To trigger a build: `git push origin release`.
 
 ## TestFlight Internal Testing (auto-invite, set up 2026-05-06)
 
