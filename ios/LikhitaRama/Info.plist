@@ -12,7 +12,7 @@
 <plist version="1.0">
 <dict>
   <key>CFBundleDevelopmentRegion</key><string>te</string>
-  <key>CFBundleDisplayName</key><string>Likhita Rama</string>
+  <key>CFBundleDisplayName</key><string>Likhita రామ</string>
   <key>CFBundleExecutable</key><string>$(EXECUTABLE_NAME)</string>
   <key>CFBundleIdentifier</key><string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
   <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
