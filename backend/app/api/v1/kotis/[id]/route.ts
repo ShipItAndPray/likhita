@@ -3,6 +3,7 @@ import { z } from "zod";
 import { readAppOrigin } from "@/lib/app-origin";
 import { requireAuth } from "@/lib/auth";
 import { handleError, jsonError } from "@/lib/http";
+import { findUserByClerkId, getKotiById } from "@/lib/repo";
 
 export const runtime = "nodejs";
 
@@ -17,19 +18,16 @@ export async function GET(
     const auth = await requireAuth(req);
     const { id } = KotiIdParam.parse(await ctx.params);
 
-    // Stubbed lookup: in production this loads the koti row + entry counts and
-    // verifies ownership against `auth.userId`.
-    const fakeKoti = {
-      id,
-      userId: auth.userId,
-      currentCount: 0,
-      targetCount: 100000,
-      locked: true,
-    };
-    if (!fakeKoti) {
+    const koti = await getKotiById(id);
+    if (!koti) {
       return jsonError(404, "not_found", "Koti does not exist");
     }
-    return NextResponse.json({ koti: fakeKoti });
+    const user = await findUserByClerkId(auth.clerkId);
+    const userId = user?.id ?? auth.clerkId;
+    if (koti.userId !== userId) {
+      return jsonError(403, "forbidden", "You do not own this koti");
+    }
+    return NextResponse.json({ koti });
   } catch (err) {
     return handleError(err);
   }

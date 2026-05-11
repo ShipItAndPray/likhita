@@ -19,8 +19,32 @@ Created on 2026-05-06 via persistent-Chrome CDP automation. Both bundle IDs regi
 ## Apple team
 
 - Team ID: `WS486NY2HV` (cached in user memory)
+- Team UUID (ASC URL): `264e0e07-1489-4723-867d-f4c65a5e5bc2`
 - Apple Developer Program: active
-- ASC API key: pending — page shows "Request Access" gate
+- ASC API key: pending — page shows "Request Access" gate (workaround: drive web UI via persistent Chrome CDP)
+
+## Xcode Cloud workflows (created 2026-05-06)
+
+| App | Workflow | Branch (start condition) | Status |
+|---|---|---|---|
+| Likhita Rama (`6766999832`) | "Default" | `main` | ✅ created, no build yet |
+| Likhita Ram (`6766999936`) | "Default" | `main` | ✅ created, no build yet |
+
+To trigger first build: push any commit to `main` and Xcode Cloud will pick it up.
+To switch to `release` branch start condition: ASC → app → Xcode Cloud → Manage Workflows → Default → Edit → Start Conditions → Branch Changes → `release`.
+
+## TestFlight Internal Testing (auto-invite, set up 2026-05-06)
+
+Both apps have an Internal Testing group named **"Self"** with **auto-distribution enabled** and the account holder as the only tester.
+
+| App | Group ID | Auto-distribute | Testers |
+|---|---|---|---|
+| Likhita Rama (`6766999832`) | `dbfdd59c-3fb0-46dc-aeff-c134b8a8ef8e` | ✅ | 1 (account holder) |
+| Likhita Ram (`6766999936`)  | `11ed1571-9258-4da0-ac09-008eb96a2296` | ✅ | 1 (account holder) |
+
+When a Cloud build finishes processing in ASC, it auto-attaches to both groups → TestFlight push notification fires on the user's iPhone — no manual click per build, ever.
+
+Reusable script: `~/.claude/skills/ios-deployment/templates/asc-tf-internal.mjs`
 
 ## Capabilities (none yet)
 

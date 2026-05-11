@@ -14,11 +14,13 @@ public enum APIError: Error, Sendable {
 /// (SPEC.md §17 / §19) and a Clerk bearer token when available.
 public actor APIClient {
     public typealias TokenProvider = @Sendable () async -> String?
+    public typealias HeaderProvider = @Sendable () async -> [String: String]
 
     private let baseURL: URL
     private let appOrigin: String
     private let session: URLSession
     private let tokenProvider: TokenProvider
+    private let extraHeaders: HeaderProvider
     private let decoder: JSONDecoder
     private let encoder: JSONEncoder
 
@@ -26,12 +28,14 @@ public actor APIClient {
         baseURL: URL,
         appOrigin: String,
         session: URLSession = .shared,
-        tokenProvider: @escaping TokenProvider = { nil }
+        tokenProvider: @escaping TokenProvider = { nil },
+        extraHeaders: @escaping HeaderProvider = { [:] }
     ) {
         self.baseURL = baseURL
         self.appOrigin = appOrigin
         self.session = session
         self.tokenProvider = tokenProvider
+        self.extraHeaders = extraHeaders
 
         let dec = JSONDecoder()
         dec.keyDecodingStrategy = .convertFromSnakeCase
@@ -79,6 +83,10 @@ public actor APIClient {
         req.setValue(appOrigin, forHTTPHeaderField: "X-App-Origin")
         if let token = await tokenProvider() {
             req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        let extra = await extraHeaders()
+        for (key, value) in extra {
+            req.setValue(value, forHTTPHeaderField: key)
         }
         if let body { req.httpBody = body }
         return req

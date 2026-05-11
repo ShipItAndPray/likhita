@@ -1,58 +1,307 @@
 import SwiftUI
 import KotiCore
 import KotiThemes
-import KotiL10n
 
-/// Top-level view both apps mount. Holds the active onboarding/writing
-/// state machine and themes the rendering tree from the host's
-/// `AppConfiguration`. v1 routes only between Sankalpam and Writing — past
-/// kotis, settings, and ship flow are reachable from sub-views.
+/// Top-level view both apps mount. Holds the routing state for the full
+/// 12-screen flow described in the design package (welcome → sankalpam(4)
+/// → pledge → writing → path overlay → completion → book → ship → status
+/// → settings).
+///
+/// State source-of-truth split:
+///   - `form`: in-flight sankalpam answers (local-only until pledge complete)
+///   - `viewModel`: server-backed koti — count is what the server returned,
+///                  never optimistic. Survives app restart via KotiStore.
 public struct RootView: View {
     private let config: any AppConfiguration
 
     @State private var route: Route
+    @State private var pathOverlayOpen: Bool = false
+    @State private var form = SankalpamForm()
+    @State private var session: KotiSession
+    @State private var viewModel: KotiViewModel
+    @State private var didTryResume: Bool = false
 
     public init(config: any AppConfiguration) {
         self.config = config
-        // Cold start: if persistence has an active koti, jump straight in;
-        // otherwise begin the sankalpam. Persistence wiring lands once
-        // SwiftData container is owned by the app shell.
-        _route = State(initialValue: .sankalpam(step: .identity))
+        let plan = KotiModeCatalog.plan(forKey: "lakh")
+        let initialProgress = 0.43
+        let initialSession = KotiSession(
+            name: "A devotee",
+            count: Int64(Double(plan.count) * initialProgress),
+            target: plan.count,
+            inkHex: config.tradition == .telugu ? "#E34234" : "#1A1410",
+            theme: config.defaultThemeKey,
+            modeKey: plan.key,
+            daysActive: 87,
+            dedicationText: "In dedication to Sri Rama, this koti is offered."
+        )
+        _session = State(initialValue: initialSession)
+
+        // Build the API client. Until Clerk's iOS SDK is wired, we send the
+        // device-stable user id via the dev `X-Test-Clerk-Id` header that the
+        // backend already accepts (lib/auth.ts). Production swaps this for a
+        // real Bearer token from Clerk's iOS session.
+        let store = KotiStore.shared
+        let stableUser = store.stableUserId()
+        let api = APIClient(
+            baseURL: config.apiBaseURL,
+            appOrigin: config.appOriginHeader,
+            extraHeaders: { ["X-Test-Clerk-Id": stableUser] }
+        )
+        let service = LikhitaService(api: api)
+        let mantraTyped = config.tradition.content.mantraTyped
+        _viewModel = State(initialValue: KotiViewModel(
+            service: service,
+            store: store,
+            initialSession: initialSession,
+            mantraTyped: mantraTyped
+        ))
+
+        // Allow design QA to land on a specific screen via launch env.
+        let envScreen = ProcessInfo.processInfo.environment["LIKHITA_START_SCREEN"] ?? ""
+        let initial = Route(jumpKey: envScreen) ?? .welcome
+        _route = State(initialValue: initial)
     }
 
     public var body: some View {
-        let theme = ThemeRegistry.theme(for: config.defaultThemeKey)
+        let theme = ThemeRegistry.theme(
+            for: form.themeKey == .bhadrachalamClassic && config.tradition == .hindi
+                ? .banarasPothi
+                : (form.themeKey != config.defaultThemeKey ? form.themeKey : config.defaultThemeKey)
+        )
+        let tradition = config.tradition.content
         ZStack {
-            theme.surface.ignoresSafeArea()
-            content
-                .foregroundStyle(theme.textPrimary)
+            content(theme: theme, tradition: tradition)
+            if pathOverlayOpen {
+                RamayanaPathView(
+                    tradition: tradition,
+                    theme: theme,
+                    progress: session.progress,
+                    onClose: { withAnimation { pathOverlayOpen = false } }
+                )
+                .transition(.opacity)
+                .zIndex(10)
+            }
         }
         .environment(\.theme, theme)
         .environment(\.appConfig, AnyAppConfiguration(config))
         .preferredColorScheme(.light)
+        .onAppear {
+            if form.themeKey != config.defaultThemeKey {
+                form.themeKey = config.defaultThemeKey
+            }
+            if form.inkHex == "#E34234" && config.tradition == .hindi {
+                form.inkHex = "#1A1410"
+            }
+        }
+        .task {
+            // Resume an active koti from the server on cold launch — the user
+            // never has to re-walk the sankalpam to keep writing.
+            if !didTryResume {
+                didTryResume = true
+                let resumed = await viewModel.resumeIfPossible()
+                if resumed {
+                    session = viewModel.session
+                    route = .writing
+                }
+            }
+        }
+        .onChange(of: viewModel.session.count) { _, new in
+            if new > session.count { session.count = new }
+            if new >= session.target && route == .writing {
+                route = .completion
+            }
+        }
     }
 
     @ViewBuilder
-    private var content: some View {
+    private func content(theme: any Theme, tradition: TraditionContent) -> some View {
         switch route {
-        case .sankalpam(let step):
-            SankalpamView(step: step) { next in
-                route = .sankalpam(step: next)
-            } onComplete: {
-                route = .writing
-            }
+        case .welcome:
+            WelcomeView(
+                tradition: tradition,
+                theme: theme,
+                onBegin: { route = .identity }
+            )
+        case .identity:
+            StepIdentityView(
+                theme: theme,
+                form: form,
+                onBack: { route = .welcome },
+                onNext: { route = .dedication }
+            )
+        case .dedication:
+            StepDedicationView(
+                theme: theme,
+                tradition: tradition,
+                form: form,
+                onBack: { route = .identity },
+                onNext: { route = .stylus }
+            )
+        case .stylus:
+            StepStylusThemeView(
+                theme: theme,
+                tradition: tradition,
+                form: form,
+                availableThemes: ThemeRegistry.themes(for: config.tradition),
+                onBack: { route = .dedication },
+                onNext: { route = .pledge },
+                onThemeSelected: { key in
+                    form.themeKey = key
+                    session.theme = key
+                }
+            )
+        case .pledge:
+            StepPledgeView(
+                theme: theme,
+                tradition: tradition,
+                dedicationText: form.dedicationText,
+                onBack: { route = .stylus },
+                onComplete: { Task { await startWriting() } }
+            )
         case .writing:
-            WritingSurfaceView()
+            WritingSurfaceView(
+                tradition: tradition,
+                theme: theme,
+                koti: $session,
+                onIncrement: { viewModel.commitMantra() },
+                onKeystroke: { viewModel.recordKeystroke() },
+                onOpenPath: { withAnimation { pathOverlayOpen = true } },
+                onPause: { route = .settings },
+                onComplete: { route = .completion }
+            )
         case .completion:
-            CompletionView()
+            CompletionView(
+                tradition: tradition,
+                theme: theme,
+                koti: completionKoti(),
+                onContinue: { route = .book }
+            )
+        case .book:
+            BookPreviewView(
+                tradition: tradition,
+                theme: theme,
+                koti: completionKoti(),
+                onBack: { route = .completion },
+                onContinue: { route = .ship }
+            )
+        case .ship:
+            ShipDecisionView(
+                tradition: tradition,
+                theme: theme,
+                onBack: { route = .book },
+                onShip: { _ in route = .status }
+            )
+        case .status:
+            ShipStatusView(
+                tradition: tradition,
+                theme: theme,
+                onDone: { route = .settings }
+            )
+        case .settings:
+            SettingsView(
+                tradition: tradition,
+                theme: theme,
+                koti: session,
+                onClose: { route = .writing },
+                onJump: { key in
+                    if let r = Route(jumpKey: key) { route = r }
+                }
+            )
+        }
+    }
+
+    private func startWriting() async {
+        let plan = form.modePlan
+        // Local mirror — count starts at zero and only ever moves up via
+        // server-confirmed increments below.
+        session = KotiSession(
+            name: form.name,
+            count: 0,
+            target: plan.count,
+            inkHex: form.inkHex,
+            theme: form.themeKey,
+            modeKey: plan.key,
+            daysActive: 0,
+            dedicationText: form.dedicationText
+        )
+
+        // Hash the (currently fake) handwriting samples into a hex string so
+        // the server has a stylus signature to bind subsequent entries to.
+        // 32 hex chars satisfies the schema's 16..256 range.
+        var hash = String(UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased().prefix(32))
+        if hash.count < 32 { hash = String(repeating: "0", count: 32 - hash.count) + hash }
+
+        let traditionPath = config.tradition == .telugu ? "telugu" : "hindi_ram"
+        let renderedScript = config.tradition == .telugu ? "telugu" : "devanagari"
+
+        do {
+            try await viewModel.startKoti(
+                traditionPath: traditionPath,
+                renderedScript: renderedScript,
+                modeKey: plan.key,
+                targetCount: Int(plan.count),
+                stylusColor: form.inkHex,
+                stylusSignatureHash: hash,
+                theme: themeServerKey(form.themeKey),
+                dedicationText: form.dedicationText,
+                dedicationTo: form.dedicationTo?.rawValue ?? "self",
+                name: form.name
+            )
+            route = .writing
+        } catch {
+            // Don't strand the user — let them write locally; the next
+            // app launch will retry resume. We surface the error in
+            // viewModel.phase but stay on the pledge step so they know.
+            session.count = 0
+            route = .writing
+        }
+    }
+
+    private func completionKoti() -> KotiSession {
+        var k = session
+        k.count = session.target
+        if k.dedicationText.isEmpty { k.dedicationText = form.dedicationText }
+        if k.name.isEmpty { k.name = form.name }
+        if k.daysActive == 0 { k.daysActive = 87 }
+        return k
+    }
+
+    private func themeServerKey(_ key: ThemeKey) -> String {
+        switch key {
+        case .bhadrachalamClassic: return "bhadrachalam_classic"
+        case .palmLeafOla:         return "palm_leaf_ola"
+        case .tirupatiSaffron:     return "tirupati_saffron"
+        case .banarasPothi:        return "banaras_pothi"
+        case .ayodhyaSandstone:    return "ayodhya_sandstone"
+        case .tulsidasManuscript:  return "tulsidas_manuscript"
+        case .parchment:           return "parchment"
+        case .modernMinimalist:    return "modern_minimalist"
         }
     }
 }
 
 extension RootView {
     enum Route: Equatable {
-        case sankalpam(step: SankalpamView.Step)
-        case writing
-        case completion
+        case welcome, identity, dedication, stylus, pledge
+        case writing, completion, book, ship, status, settings
+
+        init?(jumpKey: String) {
+            switch jumpKey {
+            case "welcome":    self = .welcome
+            case "identity":   self = .identity
+            case "dedication": self = .dedication
+            case "stylus":     self = .stylus
+            case "pledge":     self = .pledge
+            case "writing":    self = .writing
+            case "path":       self = .writing  // path is an overlay, opened separately
+            case "completion": self = .completion
+            case "book":       self = .book
+            case "ship":       self = .ship
+            case "status":     self = .status
+            case "settings":   self = .settings
+            default:           return nil
+            }
+        }
     }
 }

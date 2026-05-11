@@ -11,6 +11,15 @@ import {
   type AuditReason,
 } from "@/lib/anticheat";
 import { hashRequestBody, validateIdempotencyKey } from "@/lib/idempotency";
+import {
+  commitEntries,
+  findUserByClerkId,
+  getKotiById,
+  getRecentForKoti,
+  lookupIdempotency,
+  storeIdempotency,
+  type EntryInsert,
+} from "@/lib/repo";
 
 export const runtime = "nodejs";
 
@@ -30,33 +39,6 @@ const Body = z.object({
   entries: z.array(EntryItem).min(1).max(25),
 });
 
-// In a real implementation this comes from the DB row for the koti.
-type KotiSnapshot = {
-  id: string;
-  userId: string;
-  currentCount: number;
-  targetCount: number;
-  baselineCadenceMs: number | null;
-  baselineVarianceMs: number | null;
-  recentCommitsMs: number[];
-  recentCadenceFingerprints: string[];
-};
-
-async function loadKotiSnapshot(id: string, userId: string): Promise<KotiSnapshot | null> {
-  // Stubbed snapshot. The real loader joins kotis + last N entries to populate
-  // `recentCommitsMs` and `recentCadenceFingerprints` for anti-cheat checks.
-  return {
-    id,
-    userId,
-    currentCount: 0,
-    targetCount: 100000,
-    baselineCadenceMs: 180,
-    baselineVarianceMs: 45,
-    recentCommitsMs: [],
-    recentCadenceFingerprints: [],
-  };
-}
-
 export async function POST(
   req: NextRequest,
   ctx: { params: Promise<{ id: string }> },
@@ -70,19 +52,45 @@ export async function POST(
     validateIdempotencyKey(body.idempotencyKey);
     const requestHash = hashRequestBody(body);
 
-    const snapshot = await loadKotiSnapshot(id, auth.userId);
-    if (!snapshot) return jsonError(404, "not_found", "Koti does not exist");
-    if (snapshot.userId !== auth.userId) {
+    // Idempotency: same key + same body hash → return cached response.
+    const cached = await lookupIdempotency(id, body.idempotencyKey);
+    if (cached) {
+      if (cached.hash !== requestHash) {
+        return jsonError(
+          409,
+          "idempotency_conflict",
+          "Idempotency key was reused with a different body",
+        );
+      }
+      return NextResponse.json(cached.response);
+    }
+
+    const koti = await getKotiById(id);
+    if (!koti) return jsonError(404, "not_found", "Koti does not exist");
+
+    const user = await findUserByClerkId(auth.clerkId);
+    const userId = user?.id ?? auth.clerkId;
+    if (koti.userId !== userId) {
       return jsonError(403, "forbidden", "You do not own this koti");
     }
 
+    if (koti.completedAt) {
+      return jsonError(
+        410,
+        "koti_complete",
+        "This koti has already reached its target. No further entries accepted.",
+      );
+    }
+
+    const recent = await getRecentForKoti(id);
+
     const now = Date.now();
-    if (isRateLimited(snapshot.recentCommitsMs, now)) {
+    if (isRateLimited(recent.recentCommitsMs, now)) {
       return jsonError(429, "rate_limited", "Slow down. This is sadhana, not a race.");
     }
 
     const seqNumbers = body.entries.map((e) => e.sequenceNumber);
-    const continuity = checkSequenceContinuity(seqNumbers, snapshot.currentCount + 1);
+    const continuity = checkSequenceContinuity(seqNumbers, koti.currentCount + 1);
     if (!continuity.ok) {
       return jsonError(409, continuity.reason, "Sequence numbers must be contiguous");
     }
@@ -93,9 +101,9 @@ export async function POST(
         cadence: e.cadenceSignature,
         committedAt: Date.parse(e.committedAt),
       })),
-      baselineCadenceMs: snapshot.baselineCadenceMs,
-      baselineVarianceMs: snapshot.baselineVarianceMs,
-      recentCadenceFingerprints: snapshot.recentCadenceFingerprints,
+      baselineCadenceMs: koti.baselineCadenceMs,
+      baselineVarianceMs: koti.baselineVarianceMs,
+      recentCadenceFingerprints: recent.recentCadenceFingerprints,
     });
 
     if (audit.reject && audit.rejectReason) {
@@ -104,45 +112,78 @@ export async function POST(
     }
 
     if (audit.macroLockoutSuggested) {
-      // Soft 5-minute lockout per spec §7. The client receives this code and
-      // surfaces the "Slow down. This is sadhana, not a race." message.
       return jsonError(423, "macro_lockout", "Soft lockout for 5 minutes");
     }
 
-    // In production: BEGIN TX, insert entries (with flagged column from
-    // perEntry), bump currentCount, write idempotency record, COMMIT.
-    void requestHash;
-    void cadenceFingerprint;
-
+    // Cap acceptance at the target count — server is the boundary.
     const accepted = body.entries.length;
-    const newCount = snapshot.currentCount + accepted;
-    const milestoneUnlocked = crossesMilestone(snapshot.currentCount, newCount);
+    const newCount = Math.min(koti.currentCount + accepted, koti.targetCount);
 
-    return NextResponse.json({
+    const flaggedSet = new Set(
+      audit.perEntry.filter((p) => p.flagged).map((p) => p.sequenceNumber),
+    );
+
+    const entryRows: EntryInsert[] = body.entries.map((e) => ({
+      sequenceNumber: e.sequenceNumber,
+      committedAt: e.committedAt,
+      cadenceFingerprint: cadenceFingerprint(e.cadenceSignature.gaps),
+      clientSessionId: e.clientSessionId,
+      flagged: flaggedSet.has(e.sequenceNumber),
+    }));
+
+    const commit = await commitEntries({
+      kotiId: id,
+      expectedCurrentCount: koti.currentCount,
+      newCount,
+      entries: entryRows,
+    });
+
+    if (!commit.ok) {
+      return jsonError(
+        409,
+        "concurrent_update",
+        "Koti count changed during submission. Refetch and retry.",
+      );
+    }
+
+    const milestoneUnlocked = crossesMilestone(
+      koti.currentCount,
+      commit.currentCount,
+      koti.targetCount,
+    );
+
+    const response = {
       accepted,
-      currentCount: newCount,
+      currentCount: commit.currentCount,
+      targetCount: koti.targetCount,
+      complete: commit.currentCount >= koti.targetCount,
       milestoneUnlocked: milestoneUnlocked !== null,
       milestoneLabel: milestoneUnlocked,
-      flagged: audit.perEntry.filter((p) => p.flagged).map((p) => p.sequenceNumber),
-    });
+      flagged: Array.from(flaggedSet),
+    };
+
+    await storeIdempotency(id, body.idempotencyKey, requestHash, response);
+
+    return NextResponse.json(response);
   } catch (err) {
     return handleError(err);
   }
 }
 
-const MILESTONES: { count: number; label: string }[] = [
-  { count: 11_000, label: "Ayodhya" },
-  { count: 25_000, label: "Chitrakoot" },
-  { count: 40_000, label: "Panchavati" },
-  { count: 55_000, label: "Kishkindha" },
-  { count: 70_000, label: "Lanka Bridge" },
-  { count: 90_000, label: "Lanka Yuddha" },
-  { count: 100_000, label: "Pattabhishekam" },
+const MILESTONES: { fraction: number; label: string }[] = [
+  { fraction: 0.10, label: "Chitrakoot" },
+  { fraction: 0.25, label: "Panchavati" },
+  { fraction: 0.50, label: "Kishkindha" },
+  { fraction: 0.75, label: "Setu" },
+  { fraction: 0.90, label: "Lanka" },
+  { fraction: 1.00, label: "Pattabhishekam" },
 ];
 
-function crossesMilestone(prev: number, next: number): string | null {
+function crossesMilestone(prev: number, next: number, targetCount: number): string | null {
+  if (targetCount <= 0) return null;
   for (const m of MILESTONES) {
-    if (prev < m.count && next >= m.count) return m.label;
+    const threshold = Math.floor(m.fraction * targetCount);
+    if (prev < threshold && next >= threshold) return m.label;
   }
   return null;
 }

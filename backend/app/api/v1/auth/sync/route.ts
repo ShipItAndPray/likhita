@@ -3,6 +3,7 @@ import { z } from "zod";
 import { readAppOrigin } from "@/lib/app-origin";
 import { requireAuth } from "@/lib/auth";
 import { handleError } from "@/lib/http";
+import { upsertUser } from "@/lib/repo";
 
 export const runtime = "nodejs";
 
@@ -21,16 +22,26 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     const auth = await requireAuth(req);
     const body = SyncBody.parse(await req.json());
 
-    // In a full implementation this upserts into `users` keyed on clerkId and
-    // appends `appOrigin` to linkedApps. Stubbed here so the route is type-safe
-    // and tested without a live DB.
+    const user = await upsertUser({
+      clerkId: auth.clerkId,
+      name: body.name,
+      email: body.email,
+      gotra: body.gotra,
+      nativePlace: body.nativePlace,
+      phone: body.phone,
+      uiLanguage: body.uiLanguage,
+      appOrigin,
+    });
+
     return NextResponse.json({
       ok: true,
       user: {
-        clerkId: auth.clerkId,
-        name: body.name,
-        email: body.email,
-        primaryApp: appOrigin,
+        id: user.id,
+        clerkId: user.clerkId,
+        name: user.name,
+        email: user.email,
+        primaryApp: user.primaryApp ?? appOrigin,
+        linkedApps: user.linkedApps,
       },
     });
   } catch (err) {
