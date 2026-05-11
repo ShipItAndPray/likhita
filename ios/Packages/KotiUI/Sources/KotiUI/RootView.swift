@@ -58,8 +58,9 @@ public struct RootView: View {
         ))
 
         // Allow design QA to land on a specific screen via launch env.
+        // v2 design: default entry point is the Threshold (My Book vs Sangha).
         let envScreen = ProcessInfo.processInfo.environment["LIKHITA_START_SCREEN"] ?? ""
-        let initial = Route(jumpKey: envScreen) ?? .welcome
+        let initial = Route(jumpKey: envScreen) ?? .threshold
         _route = State(initialValue: initial)
     }
 
@@ -116,7 +117,50 @@ public struct RootView: View {
 
     @ViewBuilder
     private func content(theme: any Theme, tradition: TraditionContent) -> some View {
+        // v2 design: The Sangha (shared koti) always renders in Bhadrachalam
+        // cloth/foil regardless of which app you're in — it's the same
+        // single Foundation Koti, not per-tradition.
+        let sanghaTheme = ThemeRegistry.theme(for: .bhadrachalamClassic)
+
         switch route {
+        case .threshold:
+            ThresholdView(
+                tradition: tradition,
+                theme: theme,
+                sanghaTheme: sanghaTheme,
+                myCount: session.count,
+                myTarget: session.target,
+                onEnterMine: {
+                    // If user has never started a koti, walk the sankalpam.
+                    // Otherwise drop straight back into writing.
+                    if viewModel.serverKotiId == nil {
+                        route = .welcome
+                    } else {
+                        route = .writing
+                    }
+                },
+                onEnterSangha: { route = .sharedHub }
+            )
+        case .sharedHub:
+            SharedHubView(
+                tradition: tradition,
+                theme: sanghaTheme,
+                onWrite: { route = .sharedWrite },
+                onOpenWriters: { route = .sharedHands },
+                onClose: { route = .threshold }
+            )
+        case .sharedWrite:
+            SharedWritingView(
+                tradition: tradition,
+                theme: theme,
+                onClose: { route = .sharedHub }
+            )
+        case .sharedHands:
+            SharedWritersView(
+                tradition: tradition,
+                theme: sanghaTheme,
+                onClose: { route = .sharedHub }
+            )
         case .welcome:
             WelcomeView(
                 tradition: tradition,
@@ -167,6 +211,7 @@ public struct RootView: View {
                 onIncrement: { viewModel.commitMantra() },
                 onKeystroke: { viewModel.recordKeystroke() },
                 onOpenPath: { withAnimation { pathOverlayOpen = true } },
+                onThreshold: { route = .threshold },
                 onPause: { route = .settings },
                 onComplete: { route = .completion }
             )
@@ -283,11 +328,17 @@ public struct RootView: View {
 
 extension RootView {
     enum Route: Equatable {
+        case threshold
         case welcome, identity, dedication, stylus, pledge
         case writing, completion, book, ship, status, settings
+        case sharedHub, sharedWrite, sharedHands
 
         init?(jumpKey: String) {
             switch jumpKey {
+            case "threshold":   self = .threshold
+            case "shared", "sharedHub": self = .sharedHub
+            case "sharedWrite": self = .sharedWrite
+            case "sharedHands": self = .sharedHands
             case "welcome":    self = .welcome
             case "identity":   self = .identity
             case "dedication": self = .dedication

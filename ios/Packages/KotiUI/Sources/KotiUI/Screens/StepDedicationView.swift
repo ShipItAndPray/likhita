@@ -121,11 +121,14 @@ private struct ModeRow: View {
     var body: some View {
         Button(action: action) {
             HStack(alignment: .center) {
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: 3) {
                     HStack(alignment: .lastTextBaseline, spacing: 8) {
                         Text(plan.label)
                             .font(.custom("EB Garamond", size: 18))
                             .foregroundStyle(theme.textPrimary)
+                        Text(plan.local)
+                            .font(.system(size: 14))
+                            .foregroundStyle(theme.textPrimary.opacity(0.65))
                         if plan.recommended {
                             Text("RECOMMENDED")
                                 .font(.system(size: 10))
@@ -133,9 +136,15 @@ private struct ModeRow: View {
                                 .foregroundStyle(theme.accent)
                         }
                     }
-                    Text("\(formatted(plan.count)) mantras · ~\(plan.pages) pages · \(plan.duration)")
+                    Text("\(formatted(plan.count)) · \(plan.duration) · ~\(formatted(Int64(plan.pages))) \(plan.pages == 1 ? "page" : "pages")")
                         .font(.system(size: 12))
                         .foregroundStyle(theme.textPrimary.opacity(0.6))
+                    Text(plan.note)
+                        .font(.custom("EB Garamond", size: 11))
+                        .italic()
+                        .foregroundStyle(theme.textPrimary.opacity(0.5))
+                        .lineSpacing(2)
+                        .padding(.top, 1)
                 }
                 Spacer()
                 Circle()

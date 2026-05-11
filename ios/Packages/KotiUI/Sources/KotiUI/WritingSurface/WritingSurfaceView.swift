@@ -14,6 +14,9 @@ public struct WritingSurfaceView: View {
     /// cadence sampler so the server's anti-cheat can verify human rhythm.
     let onKeystroke: () -> Void
     let onOpenPath: () -> Void
+    /// Return to the Threshold so the user can switch between My Book and
+    /// The Sangha. v2 design — pill rendered top-left.
+    let onThreshold: () -> Void
     let onPause: () -> Void
     /// Fired automatically when count reaches target — no manual shortcut.
     /// Production rule: the user cannot mark a koti complete without writing
@@ -35,6 +38,7 @@ public struct WritingSurfaceView: View {
         onIncrement: @escaping () -> Void,
         onKeystroke: @escaping () -> Void = {},
         onOpenPath: @escaping () -> Void,
+        onThreshold: @escaping () -> Void = {},
         onPause: @escaping () -> Void,
         onComplete: @escaping () -> Void
     ) {
@@ -44,6 +48,7 @@ public struct WritingSurfaceView: View {
         self.onIncrement = onIncrement
         self.onKeystroke = onKeystroke
         self.onOpenPath = onOpenPath
+        self.onThreshold = onThreshold
         self.onPause = onPause
         self.onComplete = onComplete
     }
@@ -80,7 +85,22 @@ public struct WritingSurfaceView: View {
         let pct = koti.progress
         let currentIdx = MilestoneCatalog.currentIndex(forProgress: pct)
         let milestone = MilestoneCatalog.path[currentIdx]
-        return HStack(spacing: 10) {
+        return VStack(spacing: 6) {
+            HStack {
+                ThresholdPill(
+                    color: theme.textPrimary,
+                    background: theme.page,
+                    label: "↩ Threshold",
+                    action: onThreshold
+                )
+                Spacer()
+            }
+            counterRow(pct: pct, milestone: milestone)
+        }
+    }
+
+    private func counterRow(pct: Double, milestone: Milestone) -> some View {
+        HStack(spacing: 10) {
             ProgressArc(pct: pct, foil: theme.foil, size: 38, strokeWidth: 2.5)
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 0) {

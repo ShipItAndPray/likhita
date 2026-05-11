@@ -1,10 +1,9 @@
 import Foundation
 
-/// Full mode catalog from the design (data.jsx). The base `KotiMode` enum
-/// only carries trial/lakh/crore for v1 backend compatibility — the design
-/// surfaces six selectable modes in onboarding step 2, so we extend with a
-/// parallel `KotiModePlan` value type for UI selection. Plans map onto the
-/// closest `KotiMode` for persistence.
+/// Six-rung traditional ladder offered in onboarding step 2 (design v2
+/// data.jsx). Counts are anchored in mala (rosary) practice — 108-based
+/// numbers are auspicious. Each plan maps onto a closest backend `KotiMode`
+/// for persistence (the backend currently knows only trial/lakh/crore).
 public struct KotiModePlan: Identifiable, Sendable, Hashable {
     public let key: String
     public let label: String
@@ -13,6 +12,8 @@ public struct KotiModePlan: Identifiable, Sendable, Hashable {
     public let duration: String
     public let pages: Int
     public let recommended: Bool
+    /// One-line italic gloss displayed under the row.
+    public let note: String
     public let backingMode: KotiMode
 
     public var id: String { key }
@@ -25,6 +26,7 @@ public struct KotiModePlan: Identifiable, Sendable, Hashable {
         duration: String,
         pages: Int,
         recommended: Bool,
+        note: String,
         backingMode: KotiMode
     ) {
         self.key = key
@@ -34,18 +36,25 @@ public struct KotiModePlan: Identifiable, Sendable, Hashable {
         self.duration = duration
         self.pages = pages
         self.recommended = recommended
+        self.note = note
         self.backingMode = backingMode
     }
 }
 
 public enum KotiModeCatalog {
     public static let plans: [KotiModePlan] = [
-        .init(key: "trial",     label: "Trial",          local: "పరీక్ష",      count: 1_000,      duration: "1 hour",        pages: 7,      recommended: false, backingMode: .trial),
-        .init(key: "daily",     label: "Daily Practice", local: "రోజువారీ",    count: 11_000,     duration: "1–2 weeks",     pages: 73,     recommended: false, backingMode: .lakh),
-        .init(key: "sankalpa",  label: "Sankalpa",       local: "సంకల్ప",       count: 51_000,     duration: "1–3 months",    pages: 340,    recommended: false, backingMode: .lakh),
-        .init(key: "lakh",      label: "Lakh",           local: "లక్ష",         count: 100_000,    duration: "3–12 months",   pages: 666,    recommended: true,  backingMode: .lakh),
-        .init(key: "maha",      label: "Maha Sankalpa",  local: "మహా సంకల్ప",   count: 116_000,    duration: "4–14 months",   pages: 773,    recommended: false, backingMode: .lakh),
-        .init(key: "crore",     label: "Crore",          local: "కోటి",         count: 10_000_000, duration: "lifetime",      pages: 66_666, recommended: false, backingMode: .crore),
+        .init(key: "japa",     label: "Japa",              local: "జప",            count: 108,        duration: "one sitting",  pages: 1,
+              recommended: false, note: "One mala. The traditional starting point.",                       backingMode: .trial),
+        .init(key: "nitya",    label: "Nitya",             local: "నిత్య",          count: 1_008,      duration: "one day",      pages: 7,
+              recommended: false, note: "Ten malas. A full day of practice.",                              backingMode: .trial),
+        .init(key: "sankalpa", label: "Sankalpa",          local: "సంకల్ప",         count: 51_000,     duration: "1–3 months",   pages: 340,
+              recommended: false, note: "A vowed offering. Auspicious count.",                             backingMode: .lakh),
+        .init(key: "lakh",     label: "Lakh",              local: "లక్ష",           count: 100_000,    duration: "3–12 months",  pages: 666,
+              recommended: true,  note: "A major milestone on the path to koti.",                          backingMode: .lakh),
+        .init(key: "sahasra",  label: "Sahasra-sankalpa",  local: "సహస్ర సంకల్ప",   count: 108_000,    duration: "4–14 months",  pages: 720,
+              recommended: false, note: "One thousand times one hundred and eight.",                       backingMode: .lakh),
+        .init(key: "crore",    label: "Koti",              local: "కోటి",           count: 10_000_000, duration: "a lifetime",   pages: 66_666,
+              recommended: false, note: "The canonical Rama Koti. The reason this practice has its name.", backingMode: .crore),
     ]
 
     public static func plan(forKey key: String) -> KotiModePlan {
