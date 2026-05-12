@@ -33,17 +33,23 @@ public struct RootView: View {
             KotiStore.resetForUITesting()
         }
 
-        let plan = KotiModeCatalog.plan(forKey: "lakh")
-        let initialProgress = 0.43
+        // KotiSession is initially empty. The server is the source of
+        // truth for count + target; we never seed fake progress numbers
+        // here. Earlier versions of this file seeded a 43,000/100,000
+        // "design preview" mock which leaked into production state — when
+        // a user picked a different mode (e.g. Japa 108) the seed was
+        // higher than the server's currentCount=0 and `applyServer`'s
+        // upward-only merge kept the seed. That made fresh kotis appear
+        // with absurd counts on first paint.
         let initialSession = KotiSession(
-            name: "A devotee",
-            count: Int64(Double(plan.count) * initialProgress),
-            target: plan.count,
+            name: "",
+            count: 0,
+            target: 0,
             inkHex: config.tradition == .telugu ? "#E34234" : "#1A1410",
             theme: config.defaultThemeKey,
-            modeKey: plan.key,
-            daysActive: 87,
-            dedicationText: "In dedication to Sri Rama, this koti is offered."
+            modeKey: "lakh",
+            daysActive: 0,
+            dedicationText: ""
         )
         _session = State(initialValue: initialSession)
 

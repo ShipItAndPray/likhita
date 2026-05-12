@@ -199,14 +199,15 @@ public final class KotiViewModel {
     // MARK: - Helpers
 
     private func applyServer(_ server: LikhitaService.ServerKoti) {
-        // Server is the source of truth. Never let local state regress; only
-        // forward-rebase if the server reports a higher count.
-        if Int64(server.currentCount) > session.count {
-            session.count = Int64(server.currentCount)
-        }
-        if Int64(server.targetCount) != session.target {
-            session.target = Int64(server.targetCount)
-        }
+        // Server is the source of truth, full stop. Earlier code only
+        // forward-rebased ("never let local state regress") — that was
+        // wrong because the initial KotiSession is empty/seeded, not a
+        // live local commit, so refusing to overwrite it kept whatever
+        // garbage was in the seed. The real guarantee against count
+        // regression is the backend's compare-and-swap UPDATE on the
+        // entries endpoint, not a client-side max().
+        session.count = Int64(server.currentCount)
+        session.target = Int64(server.targetCount)
         if let text = server.dedicationText, !text.isEmpty {
             session.dedicationText = text
         }
