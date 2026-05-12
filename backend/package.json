@@ -13,7 +13,7 @@
     "test:watch": "vitest",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
-    "db:push": "drizzle-kit push",
+    "db:push": "echo '❌ db:push is BLOCKED on this project — the DB is shared with chain911/rocket-merch and push compares against the live schema, which has dropped their tables before. Use db:generate + db:migrate (which only run the SQL in db/migrations/) instead. If you genuinely need push, do it on a Neon branch first, not prod.' && exit 1",
     "db:studio": "drizzle-kit studio"
   },
   "dependencies": {
