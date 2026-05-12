@@ -5,17 +5,18 @@ import KotiCore
 
 /// Loads + posts to the live Foundation Koti.
 ///
-/// **Persistence contract (fixed 2026-05-11, redesigned 2026-05-12):**
-///   - Every commit is persisted to disk immediately (UserDefaults backed
-///     queue keyed by deviceId). Survives process kill.
-///   - Auto-flush when the on-disk queue reaches 10 entries.
+/// **Persistence contract (redesigned 2026-05-12):**
+///   - Each commitMantra() bumps an on-disk batch summary (count + first/
+///     last commit timestamps). One atomic file write per commit.
 ///   - Force-flush when the writing view disappears (`flushNow()`).
 ///   - Force-flush when the app moves to background or terminates
 ///     (caller observes scenePhase and calls `flushNow()`).
 ///   - On launch the queue is drained transparently — any unflushed
 ///     mantras from a prior session post automatically.
 ///
-/// API calls = max(N/10, 1 per app session). No mantra is ever lost.
+/// Anti-cheat was removed (devotional, voluntary practice). The wire
+/// format is a summary: `count + committedFirstAt + committedLastAt`.
+/// API calls per session: 1 GET on hub entry, 1 POST on lifecycle exit.
 @MainActor
 @Observable
 public final class SharedKotiViewModel {
@@ -34,19 +35,9 @@ public final class SharedKotiViewModel {
     private let service: LikhitaService
     private let deviceId: String
     private let store: KotiStore
-    private let cadence = CadenceSampler()
     private var refreshTask: Task<Void, Never>?
     private let mantraTyped: String
-    private let pendingKey: String
-
-    /// Unused since the per-batch trigger was removed — kept only as the
-    /// soft "if the queue gets this big, somebody is misusing the app"
-    /// alarm threshold a future surface could read. Flushes are now
-    /// strictly lifecycle-driven; see commitMantra().
-    private let batchSize = 500
-
-    /// Set to true while a POST is in flight so concurrent commits don't
-    /// fire overlapping requests.
+    private let storageKey: String
     private var posting: Bool = false
 
     public init(service: LikhitaService, store: KotiStore = .shared, mantraTyped: String) {
@@ -54,41 +45,33 @@ public final class SharedKotiViewModel {
         self.store = store
         self.deviceId = store.stableUserId()
         self.mantraTyped = mantraTyped
-        self.pendingKey = "likhita.sangha.pendingPosts.\(store.stableUserId())"
+        self.storageKey = "likhita.sangha.\(store.stableUserId())"
 
         // UI-testing helper: `--simulate-mantras=N` synthesizes N committed
-        // mantras directly into the on-disk queue at init time. Lets tests
-        // exercise the disk-persist → flush → server pipeline without the
-        // XCUITest keyboard/typeText race. Gated on --ui-testing.
+        // mantras directly into the on-disk summary at init time, so XCUITest
+        // can exercise the disk → flush → server pipeline without driving the
+        // keyboard.
         let args = ProcessInfo.processInfo.arguments
         if args.contains("--ui-testing"),
            let simArg = args.first(where: { $0.hasPrefix("--simulate-mantras=") }),
            let n = Int(simArg.dropFirst("--simulate-mantras=".count)),
            n > 0 {
-            let gaps = [180.0, 220.0, 195.0, 240.0, 175.0, 200.0]
-            for _ in 0..<n {
-                PersistedSangha.append(
-                    key: pendingKey,
-                    entry: PersistedSangha.Entry(committedAt: Date(), gaps: gaps)
-                )
-            }
+            let now = Date()
+            let first = now.addingTimeInterval(-Double(n))
+            PersistedSangha.bump(key: storageKey, addCount: n, first: first, last: now)
         }
 
-        // Surface any items left over from a prior session — the UI shows
-        // them as pendingFlush so the user knows there's outstanding work.
-        let pending = PersistedSangha.load(key: pendingKey)
+        let pending = PersistedSangha.load(key: storageKey)
         self.mySessionCount = pending.count
         self.pendingFlush = pending.count
-        if !pending.isEmpty {
+        if pending.count > 0 {
             Task { await flushNow() }
         }
     }
 
     /// Refresh once on entry. Polling is intentionally NOT enabled — the
     /// Sangha counter moves slowly enough that a static read on entry is
-    /// fine. To see fresh data, go back to the Threshold and re-enter
-    /// the hub. This keeps the per-session API call count at the bare
-    /// minimum (one GET per hub visit).
+    /// fine. To see fresh data, go back to the Threshold and re-enter.
     public func startPolling() {
         if refreshTask != nil { return }
         refreshTask = Task { [weak self] in
@@ -114,83 +97,61 @@ public final class SharedKotiViewModel {
 
     // MARK: - Writing surface integration
 
-    public func recordKeystroke() {
-        cadence.record()
-    }
+    /// No-op since anti-cheat was removed. Kept for source compatibility.
+    public func recordKeystroke() {}
 
-    /// Called once per completed mantra. Bumps session counter, persists
-    /// the entry to disk, fires a batched POST if the queue has hit the
-    /// batch threshold. Cheap in the typical case (no HTTP).
-    ///
-    /// In `--ui-testing` mode the cadence sampler is bypassed and we emit
-    /// a known-good human-paced gap pattern. XCUITest `typeText` produces
-    /// gaps in the 15-50ms range which trips the server's 30ms hold-key
-    /// floor; that would make every UI test scenario red regardless of
-    /// whether the actual persistence flow works.
+    /// Called once per completed mantra. Bumps the on-disk batch summary
+    /// (count + last timestamp). One atomic file write. No HTTP.
     public func commitMantra() {
-        let realGaps = cadence.takeGaps(expected: mantraTyped.count)
-        let gaps = ProcessInfo.processInfo.arguments.contains("--ui-testing")
-            ? [180.0, 220.0, 195.0, 240.0, 175.0, 200.0] // canonical human cadence
-            : realGaps
-        let entry = PersistedSangha.Entry(committedAt: Date(), gaps: gaps)
-        PersistedSangha.append(key: pendingKey, entry: entry)
+        let now = Date()
+        PersistedSangha.bump(key: storageKey, addCount: 1, first: nil, last: now)
         mySessionCount += 1
         pendingFlush += 1
-        // No per-batch network trigger. Flushes fire only on lifecycle
-        // hooks (view disappear, scene background, app terminate). Every
-        // mantra is on disk before this method returns; the lifecycle
-        // flush sends them in one POST per session.
     }
 
     /// Force a flush of every queued entry. Call this from:
     ///   - the writing view's `onDisappear`
     ///   - the app's `scenePhase` change to `.background` or `.inactive`
     ///   - app foreground (to drain any pending from prior session)
-    ///   - error retries
     public func flushNow() async {
         if posting { return }
         posting = true
         defer { posting = false }
 
-        var pending = PersistedSangha.load(key: pendingKey)
-        while !pending.isEmpty {
-            // 500 matches the server-side cap on entries[] per POST.
-            let batch = Array(pending.prefix(500))
-            let payloads = batch.map {
-                LikhitaService.SharedEntryPayload(committedAt: $0.committedAt, gaps: $0.gaps)
-            }
+        guard var pending = PersistedSangha.load(key: storageKey).nonEmpty else { return }
+
+        // Cap per-POST count to avoid sending more than the server accepts.
+        let stride = 1008
+        while pending.count > 0 {
+            let chunkCount = min(pending.count, stride)
             let req = LikhitaService.SharedAppendRequest(
                 deviceId: deviceId,
                 displayName: nil,
                 place: nil,
                 country: nil,
-                entries: payloads
+                count: chunkCount,
+                committedFirstAt: pending.committedFirstAt,
+                committedLastAt: pending.committedLastAt
             )
             do {
                 let resp = try await service.appendSharedEntries(req)
-                let accepted = resp.acceptedHere
-                let drop = (resp.complete ? batch.count : accepted)
-                pending.removeFirst(min(drop, pending.count))
-                PersistedSangha.save(key: pendingKey, entries: pending)
+                let drop = (resp.complete ? chunkCount : resp.acceptedHere)
+                pending = PersistedSangha.drain(key: storageKey, count: drop) ?? PersistedSangha.Empty
                 pendingFlush = pending.count
                 if resp.complete {
-                    pending.removeAll()
-                    PersistedSangha.save(key: pendingKey, entries: [])
+                    PersistedSangha.wipe(key: storageKey)
                     pendingFlush = 0
                     break
                 }
-            } catch APIError.http(let status, let body) where status == 410 {
-                NSLog("[LikhitaFlush] 410 koti_complete — discarding queue. body=\(String(data: body, encoding: .utf8) ?? "")")
-                PersistedSangha.save(key: pendingKey, entries: [])
+            } catch APIError.http(let status, _) where status == 410 {
+                PersistedSangha.wipe(key: storageKey)
                 pendingFlush = 0
                 break
             } catch APIError.http(let status, let body) {
                 let bodyStr = String(data: body, encoding: .utf8) ?? "(non-utf8)"
-                NSLog("[LikhitaFlush] POST FAILED status=\(status) body=\(bodyStr)")
                 phase = .error("HTTP \(status): \(bodyStr)")
                 return
             } catch {
-                NSLog("[LikhitaFlush] POST FAILED: \(error)")
                 phase = .error(describe(error))
                 return
             }
@@ -211,26 +172,17 @@ public final class SharedKotiViewModel {
     }
 }
 
-/// Disk-persisted retry queue for Sangha entries. Each entry is a single
-/// mantra commit. Survives app process kill so mantras typed offline / on
-/// flaky networks are never lost.
-///
-/// **Important: backed by FileManager atomic writes, NOT UserDefaults.**
-/// UserDefaults batches writes and syncs to disk asynchronously; if iOS
-/// terminates the app process before the batch flushes, the data is lost.
-/// FileManager.write(.atomic) is a fsync'd write that survives even an
-/// immediate `app.terminate()` from XCUITest.
-///
-/// Storage path: <App's Library/Caches>/sangha-queue-<key>.json
+/// Disk-persisted batch summary for the Sangha. One file per device,
+/// holding `{count, committedFirstAt, committedLastAt}`. Every commit
+/// atomic-writes the updated summary — survives process kill.
 public enum PersistedSangha {
-    public struct Entry: Codable, Sendable, Equatable {
-        public let committedAt: Date
-        public let gaps: [Double]
-        public init(committedAt: Date, gaps: [Double]) {
-            self.committedAt = committedAt
-            self.gaps = gaps
-        }
+    public struct Summary: Codable, Sendable, Equatable {
+        public var count: Int
+        public var committedFirstAt: Date
+        public var committedLastAt: Date
     }
+
+    public static let Empty = Summary(count: 0, committedFirstAt: Date(), committedLastAt: Date())
 
     private static func fileURL(forKey key: String) -> URL {
         let safeName = key.replacingOccurrences(of: ".", with: "_")
@@ -242,32 +194,60 @@ public enum PersistedSangha {
         return dir.appendingPathComponent("\(safeName).json")
     }
 
-    public static func load(key: String) -> [Entry] {
+    public static func load(key: String) -> Summary {
         let url = fileURL(forKey: key)
-        guard let data = try? Data(contentsOf: url) else { return [] }
+        guard let data = try? Data(contentsOf: url) else { return Empty }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        return (try? decoder.decode([Entry].self, from: data)) ?? []
+        return (try? decoder.decode(Summary.self, from: data)) ?? Empty
     }
 
-    public static func save(key: String, entries: [Entry]) {
+    private static func save(key: String, summary: Summary) {
         let url = fileURL(forKey: key)
-        if entries.isEmpty {
+        if summary.count == 0 {
             try? FileManager.default.removeItem(at: url)
             return
         }
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
-        guard let data = try? encoder.encode(entries) else { return }
-        // Atomic write — written to a temp file then renamed. Survives
-        // process kill mid-write because the temp file is fsync'd before
-        // the rename, and the rename itself is atomic at the FS level.
+        guard let data = try? encoder.encode(summary) else { return }
         try? data.write(to: url, options: [.atomic])
     }
 
-    public static func append(key: String, entry: Entry) {
-        var list = load(key: key)
-        list.append(entry)
-        save(key: key, entries: list)
+    /// Increment the on-disk count. If `first` is nil and we already
+    /// have a summary, we keep the existing first-timestamp; otherwise
+    /// we adopt the supplied one (or `last` as a fallback).
+    public static func bump(key: String, addCount n: Int, first: Date?, last: Date) {
+        var cur = load(key: key)
+        if cur.count == 0 {
+            cur.committedFirstAt = first ?? last
+        }
+        cur.committedLastAt = last
+        cur.count += n
+        save(key: key, summary: cur)
     }
+
+    /// Drop `count` mantras off the summary after a successful flush.
+    /// Returns the post-drain summary (or nil if completely empty).
+    public static func drain(key: String, count: Int) -> Summary? {
+        var cur = load(key: key)
+        cur.count = max(0, cur.count - count)
+        if cur.count == 0 {
+            let url = fileURL(forKey: key)
+            try? FileManager.default.removeItem(at: url)
+            return nil
+        }
+        save(key: key, summary: cur)
+        return cur
+    }
+
+    public static func wipe(key: String) {
+        let url = fileURL(forKey: key)
+        try? FileManager.default.removeItem(at: url)
+    }
+}
+
+private extension PersistedSangha.Summary {
+    /// `nil` when this summary holds nothing flushable.
+    var nonEmpty: PersistedSangha.Summary? { count > 0 ? self : nil }
 }

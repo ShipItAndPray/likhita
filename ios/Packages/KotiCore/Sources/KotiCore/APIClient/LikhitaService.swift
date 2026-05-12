@@ -115,47 +115,37 @@ public actor LikhitaService {
         return resp.kotis
     }
 
-    // MARK: - Entries (the monotonic forward-only commit)
+    // MARK: - Entries (batch summary, one POST per session)
 
-    public struct CadenceSignaturePayload: Encodable, Sendable {
-        public let gaps: [Double]
-        public init(gaps: [Double]) { self.gaps = gaps }
-    }
-
-    public struct EntryPayload: Encodable, Sendable {
-        public let sequenceNumber: Int
-        public let committedAt: String   // ISO-8601 UTC
-        public let cadenceSignature: CadenceSignaturePayload
-        public let clientSessionId: String
-
-        public init(sequenceNumber: Int, committedAt: Date, gaps: [Double], clientSessionId: String) {
-            self.sequenceNumber = sequenceNumber
-            self.committedAt = ISO8601DateFormatter.standard.string(from: committedAt)
-            self.cadenceSignature = CadenceSignaturePayload(gaps: gaps)
-            self.clientSessionId = clientSessionId
-        }
-    }
-
-    public struct SubmitEntriesRequest: Encodable, Sendable {
+    /// One batch summary. Replaces the old per-entry payload — the server
+    /// no longer needs per-mantra cadence (anti-cheat dropped) or sequence
+    /// numbers (server derives from current_count + 1).
+    public struct SubmitBatchRequest: Encodable, Sendable {
         public let idempotencyKey: String
-        public let entries: [EntryPayload]
-        public init(idempotencyKey: String, entries: [EntryPayload]) {
+        public let count: Int
+        public let clientSessionId: String
+        public let committedFirstAt: String   // ISO-8601
+        public let committedLastAt: String    // ISO-8601
+
+        public init(idempotencyKey: String, count: Int, clientSessionId: String, committedFirstAt: Date, committedLastAt: Date) {
             self.idempotencyKey = idempotencyKey
-            self.entries = entries
+            self.count = count
+            self.clientSessionId = clientSessionId
+            self.committedFirstAt = ISO8601DateFormatter.standard.string(from: committedFirstAt)
+            self.committedLastAt = ISO8601DateFormatter.standard.string(from: committedLastAt)
         }
     }
 
-    public struct SubmitEntriesResponse: Decodable, Sendable {
+    public struct SubmitBatchResponse: Decodable, Sendable {
         public let accepted: Int
         public let currentCount: Int
         public let targetCount: Int?
         public let complete: Bool?
         public let milestoneUnlocked: Bool?
         public let milestoneLabel: String?
-        public let flagged: [Int]?
     }
 
-    public func submitEntries(kotiId: String, request: SubmitEntriesRequest) async throws -> SubmitEntriesResponse {
+    public func submitBatch(kotiId: String, request: SubmitBatchRequest) async throws -> SubmitBatchResponse {
         try await api.post("/api/v1/kotis/\(kotiId)/entries", body: request)
     }
 
@@ -205,27 +195,31 @@ public actor LikhitaService {
         try await api.get("/api/v1/shared/koti")
     }
 
-    public struct SharedEntryPayload: Encodable, Sendable {
-        public let committedAt: String
-        public let cadenceSignature: CadenceSignaturePayload
-        public init(committedAt: Date, gaps: [Double]) {
-            self.committedAt = ISO8601DateFormatter.standard.string(from: committedAt)
-            self.cadenceSignature = CadenceSignaturePayload(gaps: gaps)
-        }
-    }
-
     public struct SharedAppendRequest: Encodable, Sendable {
         public let deviceId: String
         public let displayName: String?
         public let place: String?
         public let country: String?
-        public let entries: [SharedEntryPayload]
-        public init(deviceId: String, displayName: String? = nil, place: String? = nil, country: String? = nil, entries: [SharedEntryPayload]) {
+        public let count: Int
+        public let committedFirstAt: String
+        public let committedLastAt: String
+
+        public init(
+            deviceId: String,
+            displayName: String? = nil,
+            place: String? = nil,
+            country: String? = nil,
+            count: Int,
+            committedFirstAt: Date,
+            committedLastAt: Date
+        ) {
             self.deviceId = deviceId
             self.displayName = displayName
             self.place = place
             self.country = country
-            self.entries = entries
+            self.count = count
+            self.committedFirstAt = ISO8601DateFormatter.standard.string(from: committedFirstAt)
+            self.committedLastAt = ISO8601DateFormatter.standard.string(from: committedLastAt)
         }
     }
 

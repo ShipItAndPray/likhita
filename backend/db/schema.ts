@@ -88,22 +88,36 @@ export const kotis = pgTable(
   }),
 );
 
-export const entries = pgTable(
-  "entries",
+// Batched entry storage. One row per API POST. Each row is a *summary*
+// of all the mantras typed in that batch — count + sequence range + time
+// range — not a JSONB blob of per-mantra records. Anti-cheat was dropped
+// because the practice is voluntary and devotional (the user noted: "it's
+// the god who is going to enforce it"), so we no longer need cadence
+// fingerprints or per-entry rows. Storage: ~80 bytes/row, ~200 rows for
+// a Lakh koti.
+//
+// `start_sequence`..`end_sequence` is inclusive. The UNIQUE constraint
+// on (koti_id, start_sequence) keeps batch heads distinct; the route
+// handler enforces continuity (the next batch's start must equal the
+// koti's current_count + 1).
+export const entryBatches = pgTable(
+  "entry_batches",
   {
     id: uuid("id").primaryKey().defaultRandom(),
     kotiId: uuid("koti_id")
       .notNull()
       .references(() => kotis.id, { onDelete: "cascade" }),
-    sequenceNumber: bigint("sequence_number", { mode: "number" }).notNull(),
-    committedAt: timestamp("committed_at", { withTimezone: true }).notNull(),
-    cadenceSignature: text("cadence_signature").notNull(),
+    startSequence: bigint("start_sequence", { mode: "number" }).notNull(),
+    endSequence: bigint("end_sequence", { mode: "number" }).notNull(),
+    count: integer("count").notNull(),
     clientSessionId: uuid("client_session_id"),
-    flagged: boolean("flagged").notNull().default(false),
+    committedFirstAt: timestamp("committed_first_at", { withTimezone: true }).notNull(),
+    committedLastAt: timestamp("committed_last_at", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => ({
-    kotiSeq: index("entries_koti_seq").on(t.kotiId, t.sequenceNumber),
-    uniqueSeq: unique("entries_unique_seq").on(t.kotiId, t.sequenceNumber),
+    kotiStart: index("entry_batches_koti_start").on(t.kotiId, t.startSequence),
+    uniqueStart: unique("entry_batches_koti_start_unique").on(t.kotiId, t.startSequence),
   }),
 );
 
@@ -203,8 +217,12 @@ export const sharedKotis = pgTable("shared_kotis", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
-export const sharedEntries = pgTable(
-  "shared_entries",
+// Sangha equivalent of entry_batches. One row per API POST. Summary
+// only — no per-mantra JSONB, no cadence fingerprint. Includes the
+// device/identity fields required for the Sangha hub's writer ticker
+// and country breakdown.
+export const sharedEntryBatches = pgTable(
+  "shared_entry_batches",
   {
     id: uuid("id").primaryKey().defaultRandom(),
     sharedKotiId: uuid("shared_koti_id")
@@ -213,19 +231,21 @@ export const sharedEntries = pgTable(
     // Stable per-device identifier — used to compute unique-writer count
     // without requiring authentication. iOS sends KotiStore.stableUserId().
     deviceId: text("device_id").notNull(),
-    // Display name + place are optional. If both blank we render the
-    // contribution as "Anonymous". The user can change this per-write.
+    // Display name + place are optional and per-batch (the user may
+    // change them between writing sessions). If both blank we render
+    // the contribution as "Anonymous".
     displayName: text("display_name"),
     place: text("place"),
     country: text("country"),
-    cadenceSignature: text("cadence_signature").notNull(),
-    flagged: boolean("flagged").notNull().default(false),
-    committedAt: timestamp("committed_at", { withTimezone: true }).notNull().defaultNow(),
+    count: integer("count").notNull(),
+    committedFirstAt: timestamp("committed_first_at", { withTimezone: true }).notNull(),
+    committedLastAt: timestamp("committed_last_at", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => ({
-    kotiTs: index("shared_entries_koti_ts").on(t.sharedKotiId, t.committedAt),
-    deviceIdx: index("shared_entries_device").on(t.deviceId),
-    countryIdx: index("shared_entries_country").on(t.sharedKotiId, t.country),
+    kotiTs: index("shared_entry_batches_koti_ts").on(t.sharedKotiId, t.committedLastAt),
+    deviceIdx: index("shared_entry_batches_device").on(t.deviceId),
+    countryIdx: index("shared_entry_batches_country").on(t.sharedKotiId, t.country),
   }),
 );
 
@@ -233,12 +253,12 @@ export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
 export type Koti = typeof kotis.$inferSelect;
 export type NewKoti = typeof kotis.$inferInsert;
-export type Entry = typeof entries.$inferSelect;
-export type NewEntry = typeof entries.$inferInsert;
+export type EntryBatch = typeof entryBatches.$inferSelect;
+export type NewEntryBatch = typeof entryBatches.$inferInsert;
 export type Payment = typeof payments.$inferSelect;
 export type ShipBatch = typeof shipBatches.$inferSelect;
 export type Device = typeof devices.$inferSelect;
 export type SharedKoti = typeof sharedKotis.$inferSelect;
 export type NewSharedKoti = typeof sharedKotis.$inferInsert;
-export type SharedEntry = typeof sharedEntries.$inferSelect;
-export type NewSharedEntry = typeof sharedEntries.$inferInsert;
+export type SharedEntryBatch = typeof sharedEntryBatches.$inferSelect;
+export type NewSharedEntryBatch = typeof sharedEntryBatches.$inferInsert;

@@ -3,46 +3,33 @@ import { z } from "zod";
 import { readAppOrigin } from "@/lib/app-origin";
 import { requireAuth } from "@/lib/auth";
 import { handleError, jsonError } from "@/lib/http";
-import {
-  auditBatch,
-  cadenceFingerprint,
-  checkSequenceContinuity,
-  isRateLimited,
-  type AuditReason,
-} from "@/lib/anticheat";
 import { hashRequestBody, validateIdempotencyKey } from "@/lib/idempotency";
 import {
-  commitEntries,
+  commitBatch,
   findUserByClerkId,
   getKotiById,
-  getRecentForKoti,
   lookupIdempotency,
   storeIdempotency,
-  type EntryInsert,
 } from "@/lib/repo";
 
 export const runtime = "nodejs";
 
 const Param = z.object({ id: z.string().uuid() });
 
-const EntryItem = z.object({
-  sequenceNumber: z.number().int().positive(),
-  committedAt: z.string().datetime(),
-  cadenceSignature: z.object({
-    gaps: z.array(z.number().nonnegative().max(60_000)).min(1).max(64),
-  }),
-  clientSessionId: z.string().uuid(),
-});
-
+// One write batch per POST. Body is a summary, not a per-mantra payload —
+// anti-cheat was removed, so we no longer need cadence signatures or
+// individual entry timestamps. The server derives sequence numbers
+// from the current count + 1 (no client-side sequence input needed).
+//
+// `count` upper bound is 1008 (a Nitya), the largest devotional batch
+// pattern. Anything above that is almost certainly a script — and even
+// if it's not, the client should split.
 const Body = z.object({
   idempotencyKey: z.string(),
-  // 500 entries per request covers any realistic human writing session
-  // (50+ minutes of sustained typing) in a single POST. Wire payload
-  // is ~110 KB raw / ~30 KB gzipped — well under Vercel's 4.5 MB body
-  // cap, and server-side validation runs in ~300 ms. Picked over a
-  // larger number because anything beyond a Nitya (1,008) is a script,
-  // not a devotee, and we'd rather reject it than serve it.
-  entries: z.array(EntryItem).min(1).max(500),
+  count: z.number().int().positive().max(1008),
+  clientSessionId: z.string().uuid(),
+  committedFirstAt: z.string().datetime(),
+  committedLastAt: z.string().datetime(),
 });
 
 export async function POST(
@@ -58,7 +45,6 @@ export async function POST(
     validateIdempotencyKey(body.idempotencyKey);
     const requestHash = hashRequestBody(body);
 
-    // Idempotency: same key + same body hash → return cached response.
     const cached = await lookupIdempotency(id, body.idempotencyKey);
     if (cached) {
       if (cached.hash !== requestHash) {
@@ -87,60 +73,33 @@ export async function POST(
       );
     }
 
-    const recent = await getRecentForKoti(id);
-
-    const now = Date.now();
-    if (isRateLimited(recent.recentCommitsMs, now)) {
-      return jsonError(429, "rate_limited", "Slow down. This is sadhana, not a race.");
+    // Cap acceptance at the target — server is the boundary.
+    const requested = body.count;
+    const accepted = Math.min(requested, koti.targetCount - koti.currentCount);
+    if (accepted <= 0) {
+      return jsonError(
+        410,
+        "koti_complete",
+        "This koti has already reached its target. No further entries accepted.",
+      );
     }
 
-    const seqNumbers = body.entries.map((e) => e.sequenceNumber);
-    const continuity = checkSequenceContinuity(seqNumbers, koti.currentCount + 1);
-    if (!continuity.ok) {
-      return jsonError(409, continuity.reason, "Sequence numbers must be contiguous");
-    }
+    const startSequence = koti.currentCount + 1;
+    const endSequence = koti.currentCount + accepted;
+    const newCount = endSequence;
 
-    const audit = auditBatch({
-      entries: body.entries.map((e) => ({
-        sequenceNumber: e.sequenceNumber,
-        cadence: e.cadenceSignature,
-        committedAt: Date.parse(e.committedAt),
-      })),
-      baselineCadenceMs: koti.baselineCadenceMs,
-      baselineVarianceMs: koti.baselineVarianceMs,
-      recentCadenceFingerprints: recent.recentCadenceFingerprints,
-    });
-
-    if (audit.reject && audit.rejectReason) {
-      const reason: AuditReason = audit.rejectReason;
-      return jsonError(422, reason, "Anti-cheat rejected this batch");
-    }
-
-    if (audit.macroLockoutSuggested) {
-      return jsonError(423, "macro_lockout", "Soft lockout for 5 minutes");
-    }
-
-    // Cap acceptance at the target count — server is the boundary.
-    const accepted = body.entries.length;
-    const newCount = Math.min(koti.currentCount + accepted, koti.targetCount);
-
-    const flaggedSet = new Set(
-      audit.perEntry.filter((p) => p.flagged).map((p) => p.sequenceNumber),
-    );
-
-    const entryRows: EntryInsert[] = body.entries.map((e) => ({
-      sequenceNumber: e.sequenceNumber,
-      committedAt: e.committedAt,
-      cadenceFingerprint: cadenceFingerprint(e.cadenceSignature.gaps),
-      clientSessionId: e.clientSessionId,
-      flagged: flaggedSet.has(e.sequenceNumber),
-    }));
-
-    const commit = await commitEntries({
+    const commit = await commitBatch({
       kotiId: id,
       expectedCurrentCount: koti.currentCount,
       newCount,
-      entries: entryRows,
+      batch: {
+        startSequence,
+        endSequence,
+        count: accepted,
+        clientSessionId: body.clientSessionId,
+        committedFirstAt: body.committedFirstAt,
+        committedLastAt: body.committedLastAt,
+      },
     });
 
     if (!commit.ok) {
@@ -164,7 +123,6 @@ export async function POST(
       complete: commit.currentCount >= koti.targetCount,
       milestoneUnlocked: milestoneUnlocked !== null,
       milestoneLabel: milestoneUnlocked,
-      flagged: Array.from(flaggedSet),
     };
 
     await storeIdempotency(id, body.idempotencyKey, requestHash, response);

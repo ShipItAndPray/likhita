@@ -21,10 +21,13 @@ function postReq(body: unknown, headers: Record<string, string> = {}) {
   }) as unknown as Parameters<typeof POST>[0];
 }
 
-function entry(gaps: number[]) {
+function batchBody(count: number) {
+  const now = new Date();
+  const first = new Date(now.getTime() - count * 1000);
   return {
-    committedAt: new Date().toISOString(),
-    cadenceSignature: { gaps },
+    count,
+    committedFirstAt: first.toISOString(),
+    committedLastAt: now.toISOString(),
   };
 }
 
@@ -60,17 +63,14 @@ describe("GET /v1/shared/koti", () => {
 });
 
 describe("POST /v1/shared/entries", () => {
-  it("appends entries and bumps the live count", async () => {
+  it("appends a batch and bumps the live count by `count`", async () => {
     const res = await POST(
       postReq({
         deviceId: "device-test-001",
         displayName: "Anon Tester",
         place: "Bengaluru",
         country: "India",
-        entries: [
-          entry([180, 220, 195, 240, 175, 200]),
-          entry([205, 175, 240, 195, 220, 180]),
-        ],
+        ...batchBody(2),
       }),
     );
     expect(res.status).toBe(200);
@@ -90,32 +90,6 @@ describe("POST /v1/shared/entries", () => {
     expect(snap.topWriters[0]?.count).toBe(2);
   });
 
-  it("rejects a macro batch (zero variance) before appending", async () => {
-    const res = await POST(
-      postReq({
-        deviceId: "device-macro",
-        entries: [
-          entry([200, 200, 200, 200]),
-          entry([200, 200, 200, 200]),
-        ],
-      }),
-    );
-    expect(res.status).toBe(422);
-    const get = await GET(getReq());
-    const snap = (await get.json()) as { koti: { currentCount: number } };
-    expect(snap.koti.currentCount).toBe(0);
-  });
-
-  it("rejects sub-30ms inter-key gaps (hold-key macro)", async () => {
-    const res = await POST(
-      postReq({
-        deviceId: "device-fast",
-        entries: [entry([10, 12, 9, 11, 8, 10])],
-      }),
-    );
-    expect(res.status).toBe(422);
-  });
-
   it("accepts batches from multiple devices and counts unique writers", async () => {
     for (let i = 0; i < 3; i += 1) {
       const r = await POST(
@@ -123,7 +97,7 @@ describe("POST /v1/shared/entries", () => {
           deviceId: `device-${i}`,
           displayName: `Devotee ${i}`,
           country: i === 0 ? "India" : "United States",
-          entries: [entry([180, 220, 195, 240, 175, 200])],
+          ...batchBody(1),
         }),
       );
       expect(r.status).toBe(200);
@@ -135,11 +109,21 @@ describe("POST /v1/shared/entries", () => {
     expect(snap.countriesActive).toBe(2);
   });
 
+  it("rejects count > 1008 (Nitya cap)", async () => {
+    const res = await POST(
+      postReq({
+        deviceId: "device-overflow",
+        ...batchBody(1009),
+      }),
+    );
+    expect([400, 422, 500]).toContain(res.status);
+  });
+
   it("validates malformed body", async () => {
     const res = await POST(
       postReq({
         deviceId: "x", // too short
-        entries: [entry([180, 220, 195])],
+        ...batchBody(1),
       }),
     );
     expect(res.status).toBe(400);
@@ -148,7 +132,7 @@ describe("POST /v1/shared/entries", () => {
   it("requires X-App-Origin", async () => {
     const res = await POST(
       postReq(
-        { deviceId: "device-no-origin", entries: [entry([180, 220, 195])] },
+        { deviceId: "device-no-origin", ...batchBody(1) },
         { "X-App-Origin": "" },
       ),
     );

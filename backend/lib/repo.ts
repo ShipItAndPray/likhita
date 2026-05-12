@@ -74,17 +74,16 @@ export type KotiRow = {
   baselineVarianceMs: number | null;
 };
 
-export type EntryInsert = {
-  sequenceNumber: number;
-  committedAt: string;
-  cadenceFingerprint: string;
+// One write batch as it arrives from iOS — no per-mantra payload anymore,
+// just the count + the time range covered. Anti-cheat was removed (the
+// practice is voluntary; "it's the god who is going to enforce it").
+export type EntryBatchInsert = {
+  startSequence: number;
+  endSequence: number;
+  count: number;
   clientSessionId: string;
-  flagged: boolean;
-};
-
-export type RecentSnapshot = {
-  recentCommitsMs: number[];
-  recentCadenceFingerprints: string[];
+  committedFirstAt: string;
+  committedLastAt: string;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -102,7 +101,7 @@ function isTest(): boolean {
 type Mem = {
   users: Map<string, UserRow & { gotra?: string; nativePlace?: string; phone?: string; uiLanguage?: string }>;
   kotis: Map<string, KotiRow>;
-  entries: Map<string, EntryInsert[]>; // keyed by koti id
+  batches: Map<string, EntryBatchInsert[]>; // keyed by koti id
   idem: Map<string, { hash: string; response: unknown }>; // key = `${kotiId}:${idemKey}`
 };
 
@@ -112,7 +111,7 @@ function memStore(): Mem {
     g.__likhitaMem = {
       users: new Map(),
       kotis: new Map(),
-      entries: new Map(),
+      batches: new Map(),
       idem: new Map(),
     };
   }
@@ -294,7 +293,7 @@ export async function createKoti(input: CreateKotiInput): Promise<KotiRow> {
       baselineVarianceMs: 45,
     };
     mem.kotis.set(id, row);
-    mem.entries.set(id, []);
+    mem.batches.set(id, []);
     return row;
   }
 
@@ -347,28 +346,6 @@ export async function getKotiById(id: string): Promise<KotiRow | null> {
   return kotiRowFromDb(r);
 }
 
-export async function getRecentForKoti(kotiId: string): Promise<RecentSnapshot> {
-  if (isTest()) {
-    const ents = memStore().entries.get(kotiId) ?? [];
-    const last20 = ents.slice(-20);
-    return {
-      recentCommitsMs: last20.map((e) => Date.parse(e.committedAt)),
-      recentCadenceFingerprints: last20.map((e) => e.cadenceFingerprint),
-    };
-  }
-  const db = getDb();
-  const rows = await db
-    .select({ committedAt: schema.entries.committedAt, cadenceSignature: schema.entries.cadenceSignature })
-    .from(schema.entries)
-    .where(eq(schema.entries.kotiId, kotiId))
-    .orderBy(desc(schema.entries.sequenceNumber))
-    .limit(20);
-  return {
-    recentCommitsMs: rows.map((r) => (r.committedAt instanceof Date ? r.committedAt.getTime() : Date.parse(String(r.committedAt)))),
-    recentCadenceFingerprints: rows.map((r) => r.cadenceSignature),
-  };
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Idempotency
 // ─────────────────────────────────────────────────────────────────────────────
@@ -413,24 +390,24 @@ export async function storeIdempotency(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Entries — the monotonic forward-only commit
+// Entry batches — one row per API POST, summary only
 // ─────────────────────────────────────────────────────────────────────────────
 
-export type CommitEntriesInput = {
+export type CommitBatchInput = {
   kotiId: string;
   expectedCurrentCount: number;
   newCount: number;
-  entries: EntryInsert[];
+  batch: EntryBatchInsert;
 };
 
-export type CommitEntriesResult = { ok: true; currentCount: number } | { ok: false; reason: "concurrent_update" };
+export type CommitBatchResult = { ok: true; currentCount: number } | { ok: false; reason: "concurrent_update" };
 
-/// Compare-and-swap commit. The UPDATE matches on `current_count = expected`
-/// so concurrent submissions cannot double-count or move backwards. If 0 rows
-/// are updated, the caller (this is rare, but possible if the same client
-/// retries without idempotency or two clients race) is told to re-read and
-/// rebase.
-export async function commitEntries(input: CommitEntriesInput): Promise<CommitEntriesResult> {
+/// Compare-and-swap commit. UPDATE kotis matches on `current_count = expected`
+/// so concurrent submissions cannot double-count or move backwards. On success
+/// inserts ONE batch row summarizing the write (count + sequence range +
+/// time range). Anti-cheat / cadence storage was removed — devotion is
+/// voluntary.
+export async function commitBatch(input: CommitBatchInput): Promise<CommitBatchResult> {
   if (isTest()) {
     const mem = memStore();
     const k = mem.kotis.get(input.kotiId);
@@ -442,9 +419,9 @@ export async function commitEntries(input: CommitEntriesInput): Promise<CommitEn
     if (k.currentCount >= k.targetCount && !k.completedAt) {
       k.completedAt = new Date().toISOString();
     }
-    const list = mem.entries.get(input.kotiId) ?? [];
-    list.push(...input.entries);
-    mem.entries.set(input.kotiId, list);
+    const list = mem.batches.get(input.kotiId) ?? [];
+    list.push(input.batch);
+    mem.batches.set(input.kotiId, list);
     return { ok: true, currentCount: k.currentCount };
   }
 
@@ -470,18 +447,15 @@ export async function commitEntries(input: CommitEntriesInput): Promise<CommitEn
     return { ok: false, reason: "concurrent_update" };
   }
 
-  if (input.entries.length > 0) {
-    await db.insert(schema.entries).values(
-      input.entries.map((e) => ({
-        kotiId: input.kotiId,
-        sequenceNumber: e.sequenceNumber,
-        committedAt: new Date(e.committedAt),
-        cadenceSignature: e.cadenceFingerprint,
-        clientSessionId: e.clientSessionId,
-        flagged: e.flagged,
-      })),
-    );
-  }
+  await db.insert(schema.entryBatches).values({
+    kotiId: input.kotiId,
+    startSequence: input.batch.startSequence,
+    endSequence: input.batch.endSequence,
+    count: input.batch.count,
+    clientSessionId: input.batch.clientSessionId,
+    committedFirstAt: new Date(input.batch.committedFirstAt),
+    committedLastAt: new Date(input.batch.committedLastAt),
+  });
 
   return { ok: true, currentCount: Number(updatedRow.currentCount) };
 }
@@ -517,8 +491,9 @@ export type SharedAppendInput = {
   displayName: string | null;
   place: string | null;
   country: string | null;
-  cadenceFingerprints: string[];
-  flagged: boolean[];
+  count: number;
+  committedFirstAt: string;
+  committedLastAt: string;
 };
 
 export type SharedAppendResult = {
@@ -579,26 +554,26 @@ export async function getSharedHubSnapshot(): Promise<SharedHubSnapshot> {
 
   if (isTest()) {
     const mem = sharedMemStore();
-    const entries = mem.entries;
-    const uniqueDevices = new Set(entries.map((e) => e.deviceId)).size;
-    const uniqueCountries = new Set(entries.map((e) => e.country).filter(Boolean)).size;
+    const batches = mem.batches;
+    const uniqueDevices = new Set(batches.map((b) => b.deviceId)).size;
+    const uniqueCountries = new Set(batches.map((b) => b.country).filter(Boolean)).size;
     const countByDeviceName = new Map<string, number>();
     const countByCountry = new Map<string, number>();
-    for (const e of entries) {
-      const key = `${e.displayName ?? "Anonymous"}|${e.place ?? ""}`;
-      countByDeviceName.set(key, (countByDeviceName.get(key) ?? 0) + 1);
-      if (e.country) countByCountry.set(e.country, (countByCountry.get(e.country) ?? 0) + 1);
+    for (const b of batches) {
+      const key = `${b.displayName ?? "Anonymous"}|${b.place ?? ""}`;
+      countByDeviceName.set(key, (countByDeviceName.get(key) ?? 0) + b.count);
+      if (b.country) countByCountry.set(b.country, (countByCountry.get(b.country) ?? 0) + b.count);
     }
     return {
       koti,
       uniqueWriters: uniqueDevices,
       countriesActive: uniqueCountries,
-      recentWriters: entries.slice(-12).reverse().map((e) => ({
-        name: e.displayName ?? "Anonymous",
-        place: e.place ?? "",
-        count: 1,
+      recentWriters: batches.slice(-12).reverse().map((b) => ({
+        name: b.displayName ?? "Anonymous",
+        place: b.place ?? "",
+        count: b.count,
         ago: "live",
-        committedAt: e.committedAt,
+        committedAt: b.committedLastAt,
       })),
       topWriters: Array.from(countByDeviceName.entries())
         .map(([k, count]) => {
@@ -615,49 +590,53 @@ export async function getSharedHubSnapshot(): Promise<SharedHubSnapshot> {
 
   const db = getDb();
 
+  // All aggregations now read from shared_entry_batches. The `count` column
+  // on each row holds the mantras posted in that batch; SUM(count) gives
+  // the actual mantra contribution per device/country.
   const [aggRows, recentRows, topRows, countryRows] = await Promise.all([
     db.execute(sql`
       SELECT
         COUNT(DISTINCT device_id) AS unique_writers,
         COUNT(DISTINCT country) FILTER (WHERE country IS NOT NULL AND country <> '') AS countries_active
-      FROM likhita.shared_entries
+      FROM likhita.shared_entry_batches
       WHERE shared_koti_id = ${koti.id}
     `),
     db.execute(sql`
       SELECT
         COALESCE(display_name, 'Anonymous') AS name,
         COALESCE(place, '') AS place,
-        committed_at
-      FROM likhita.shared_entries
+        count,
+        committed_last_at AS committed_at
+      FROM likhita.shared_entry_batches
       WHERE shared_koti_id = ${koti.id}
-      ORDER BY committed_at DESC
+      ORDER BY committed_last_at DESC
       LIMIT 12
     `),
     db.execute(sql`
       SELECT
         COALESCE(
-          (SELECT display_name FROM likhita.shared_entries e2
-             WHERE e2.device_id = e.device_id AND display_name IS NOT NULL
-             ORDER BY committed_at DESC LIMIT 1),
+          (SELECT display_name FROM likhita.shared_entry_batches b2
+             WHERE b2.device_id = b.device_id AND display_name IS NOT NULL
+             ORDER BY committed_last_at DESC LIMIT 1),
           'Anonymous'
         ) AS name,
         COALESCE(
-          (SELECT place FROM likhita.shared_entries e3
-             WHERE e3.device_id = e.device_id AND place IS NOT NULL
-             ORDER BY committed_at DESC LIMIT 1),
+          (SELECT place FROM likhita.shared_entry_batches b3
+             WHERE b3.device_id = b.device_id AND place IS NOT NULL
+             ORDER BY committed_last_at DESC LIMIT 1),
           ''
         ) AS place,
-        COUNT(*) AS count,
-        MIN(committed_at) AS joined
-      FROM likhita.shared_entries e
+        SUM(count)::int AS count,
+        MIN(committed_first_at) AS joined
+      FROM likhita.shared_entry_batches b
       WHERE shared_koti_id = ${koti.id}
       GROUP BY device_id
       ORDER BY count DESC
       LIMIT 6
     `),
     db.execute(sql`
-      SELECT country, COUNT(*) AS count
-      FROM likhita.shared_entries
+      SELECT country, SUM(count)::int AS count
+      FROM likhita.shared_entry_batches
       WHERE shared_koti_id = ${koti.id}
         AND country IS NOT NULL AND country <> ''
       GROUP BY country
@@ -670,13 +649,13 @@ export async function getSharedHubSnapshot(): Promise<SharedHubSnapshot> {
   const uniqueWriters = aggRow ? Number(aggRow.unique_writers) : 0;
   const countriesActive = aggRow ? Number(aggRow.countries_active) : 0;
 
-  type RecentRow = { name: string; place: string; committed_at: string | Date };
+  type RecentRow = { name: string; place: string; count: number; committed_at: string | Date };
   const recent = ((recentRows.rows ?? recentRows) as unknown as RecentRow[]).map((r) => {
     const t = r.committed_at instanceof Date ? r.committed_at : new Date(r.committed_at);
     return {
       name: r.name || "Anonymous",
       place: r.place || "",
-      count: 1,
+      count: Number(r.count) || 1,
       ago: humanAgo(t.getTime()),
       committedAt: t.toISOString(),
     };
@@ -708,29 +687,28 @@ export async function getSharedHubSnapshot(): Promise<SharedHubSnapshot> {
   };
 }
 
-/// Append N entries to the shared koti. Atomic UPDATE caps `current_count`
+/// Append ONE batch to the shared koti. Atomic UPDATE caps `current_count`
 /// at `target_count` — once the 1 crore ceiling is hit, the route returns
-/// 410 koti_complete on next call.
-export async function appendSharedEntries(input: SharedAppendInput): Promise<SharedAppendResult> {
-  const desiredCount = input.cadenceFingerprints.length;
-  if (desiredCount === 0) throw new Error("appendSharedEntries: empty batch");
+/// 410 koti_complete on next call. One row written per call.
+export async function appendSharedBatch(input: SharedAppendInput): Promise<SharedAppendResult> {
+  if (input.count <= 0) throw new Error("appendSharedBatch: empty batch");
 
   if (isTest()) {
     const mem = sharedMemStore();
     const koti = await getActiveSharedKoti();
     const before = koti.currentCount;
-    const newCount = Math.min(before + desiredCount, koti.targetCount);
+    const newCount = Math.min(before + input.count, koti.targetCount);
     const acceptedHere = newCount - before;
     if (mem.koti) mem.koti.currentCount = newCount;
-    for (let i = 0; i < acceptedHere; i += 1) {
-      mem.entries.push({
+    if (acceptedHere > 0) {
+      mem.batches.push({
         deviceId: input.deviceId,
         displayName: input.displayName,
         place: input.place,
         country: input.country,
-        cadenceSignature: input.cadenceFingerprints[i] ?? "",
-        flagged: input.flagged[i] ?? false,
-        committedAt: new Date().toISOString(),
+        count: acceptedHere,
+        committedFirstAt: input.committedFirstAt,
+        committedLastAt: input.committedLastAt,
       });
     }
     return {
@@ -747,7 +725,7 @@ export async function appendSharedEntries(input: SharedAppendInput): Promise<Sha
   const updated = await db
     .update(schema.sharedKotis)
     .set({
-      currentCount: sql`LEAST(current_count + ${desiredCount}, target_count)`,
+      currentCount: sql`LEAST(current_count + ${input.count}, target_count)`,
       updatedAt: sql`NOW()`,
     })
     .where(eq(schema.sharedKotis.id, koti.id))
@@ -759,17 +737,16 @@ export async function appendSharedEntries(input: SharedAppendInput): Promise<Sha
     return { acceptedHere: 0, currentCount: after, remaining: 0, complete: after >= koti.targetCount };
   }
 
-  await db.insert(schema.sharedEntries).values(
-    Array.from({ length: acceptedHere }).map((_, i) => ({
-      sharedKotiId: koti.id,
-      deviceId: input.deviceId,
-      displayName: input.displayName,
-      place: input.place,
-      country: input.country,
-      cadenceSignature: input.cadenceFingerprints[i] ?? "",
-      flagged: input.flagged[i] ?? false,
-    })),
-  );
+  await db.insert(schema.sharedEntryBatches).values({
+    sharedKotiId: koti.id,
+    deviceId: input.deviceId,
+    displayName: input.displayName,
+    place: input.place,
+    country: input.country,
+    count: acceptedHere,
+    committedFirstAt: new Date(input.committedFirstAt),
+    committedLastAt: new Date(input.committedLastAt),
+  });
 
   return {
     acceptedHere,
@@ -783,23 +760,25 @@ export async function appendSharedEntries(input: SharedAppendInput): Promise<Sha
 // Test in-memory store for shared koti
 // ─────────────────────────────────────────────────────────────────────────────
 
+type SharedMemBatch = {
+  deviceId: string;
+  displayName: string | null;
+  place: string | null;
+  country: string | null;
+  count: number;
+  committedFirstAt: string;
+  committedLastAt: string;
+};
+
 type SharedMem = {
   koti: SharedKotiRow | null;
-  entries: {
-    deviceId: string;
-    displayName: string | null;
-    place: string | null;
-    country: string | null;
-    cadenceSignature: string;
-    flagged: boolean;
-    committedAt: string;
-  }[];
+  batches: SharedMemBatch[];
 };
 
 function sharedMemStore(): SharedMem {
   const g = globalThis as unknown as { __likhitaSharedMem?: SharedMem };
   if (!g.__likhitaSharedMem) {
-    g.__likhitaSharedMem = { koti: null, entries: [] };
+    g.__likhitaSharedMem = { koti: null, batches: [] };
   }
   return g.__likhitaSharedMem;
 }
