@@ -163,9 +163,21 @@ public final class KotiViewModel {
     }
 
     /// Force a flush of every queued entry. Called from the writing
-    /// view's lifecycle hooks. Idempotent.
+    /// view's lifecycle hooks. Loops until the on-disk buffer is empty
+    /// (or a flush errors and re-queues). Capped at 10 iterations so a
+    /// persistent server failure can't spin forever — anything left on
+    /// disk after that survives until the next launch's resume drain.
     public func flushNow() async {
-        await flush()
+        for _ in 0..<10 {
+            let before = await buffer.count()
+            if before == 0 { break }
+            await flush()
+            let after = await buffer.count()
+            // Stop if flush() made no progress — it either failed
+            // permanently this session or hit an error that already
+            // surfaced via `phase = .error(...)`.
+            if after >= before { break }
+        }
     }
 
     /// Backward-compat wrapper used by `init`/`resumeIfPossible` to
@@ -181,7 +193,10 @@ public final class KotiViewModel {
 
     private func flush() async {
         guard let kotiId = serverKotiId else { return }
-        let lease = await buffer.leaseBatch(max: 25)
+        // 500 = server-side cap on entries[] per POST. One realistic human
+        // writing session fits in one batch; longer sessions (Nitya, 1008)
+        // get drained in two iterations of flushNow()'s loop.
+        let lease = await buffer.leaseBatch(max: 500)
         guard !lease.isEmpty else { return }
         await MainActor.run { self.pendingFlush = lease.count }
 

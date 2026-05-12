@@ -39,10 +39,11 @@ public final class SharedKotiViewModel {
     private let mantraTyped: String
     private let pendingKey: String
 
-    /// Auto-flush threshold. When the disk queue reaches this many entries,
-    /// fire the POST immediately instead of waiting for view-disappear /
-    /// background.
-    private let batchSize = 10
+    /// Unused since the per-batch trigger was removed — kept only as the
+    /// soft "if the queue gets this big, somebody is misusing the app"
+    /// alarm threshold a future surface could read. Flushes are now
+    /// strictly lifecycle-driven; see commitMantra().
+    private let batchSize = 500
 
     /// Set to true while a POST is in flight so concurrent commits don't
     /// fire overlapping requests.
@@ -153,7 +154,8 @@ public final class SharedKotiViewModel {
 
         var pending = PersistedSangha.load(key: pendingKey)
         while !pending.isEmpty {
-            let batch = Array(pending.prefix(25))
+            // 500 matches the server-side cap on entries[] per POST.
+            let batch = Array(pending.prefix(500))
             let payloads = batch.map {
                 LikhitaService.SharedEntryPayload(committedAt: $0.committedAt, gaps: $0.gaps)
             }

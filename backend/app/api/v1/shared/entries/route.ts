@@ -40,7 +40,8 @@ const Body = z.object({
   displayName: optionalNullableString(1, 80),
   place: optionalNullableString(1, 80),
   country: optionalNullableString(2, 80),
-  entries: z.array(EntryItem).min(1).max(50),
+  // 500 to match the personal endpoint — see kotis/[id]/entries/route.ts.
+  entries: z.array(EntryItem).min(1).max(500),
 });
 
 // In-memory per-device cadence history so we can apply the macro-replay

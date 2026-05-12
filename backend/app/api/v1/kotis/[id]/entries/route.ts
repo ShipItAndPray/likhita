@@ -36,7 +36,13 @@ const EntryItem = z.object({
 
 const Body = z.object({
   idempotencyKey: z.string(),
-  entries: z.array(EntryItem).min(1).max(25),
+  // 500 entries per request covers any realistic human writing session
+  // (50+ minutes of sustained typing) in a single POST. Wire payload
+  // is ~110 KB raw / ~30 KB gzipped — well under Vercel's 4.5 MB body
+  // cap, and server-side validation runs in ~300 ms. Picked over a
+  // larger number because anything beyond a Nitya (1,008) is a script,
+  // not a devotee, and we'd rather reject it than serve it.
+  entries: z.array(EntryItem).min(1).max(500),
 });
 
 export async function POST(
