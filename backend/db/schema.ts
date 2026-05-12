@@ -82,6 +82,11 @@ export const kotis = pgTable(
     deliveredAt: timestamp("delivered_at", { withTimezone: true }),
     photoUrl: text("photo_url"),
     receiptUrl: text("receipt_url"),
+    // Pace screen — user-picked completion horizon and notification slots.
+    // goalDays defaults to a year; reminderTimes is an array of slot ids
+    // chosen from {brahma, pratah, madhyana, sandhya} — at most 3.
+    goalDays: integer("goal_days").notNull().default(365),
+    reminderTimes: jsonb("reminder_times").notNull().default(["pratah", "sandhya"] as unknown as object),
   },
   (t) => ({
     userIdx: index("kotis_user").on(t.userId),

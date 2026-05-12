@@ -69,9 +69,24 @@ export type KotiRow = {
   startedAt: string;
   completedAt: string | null;
   locked: boolean;
-  // Anti-cheat baselines stored on the row (see comments in entries route).
+  // Pace screen — user-chosen completion horizon + notification slots.
+  // reminderTimes is a JSONB array of ids: subset of
+  // {brahma, pratah, madhyana, sandhya}, at most 3 enforced client-side.
+  goalDays: number;
+  reminderTimes: string[];
+  // Legacy anti-cheat baselines — anti-cheat was removed, kept on the
+  // type as null for backward compat with code that reads them.
   baselineCadenceMs: number | null;
   baselineVarianceMs: number | null;
+};
+
+/// One day's mantra contribution to a koti. Used by the Pace screen's
+/// calendar — `committed_first_at` truncated to a day, with the count
+/// SUM'd across batches that landed on that day.
+export type DailyCount = {
+  /// ISO date `YYYY-MM-DD` in UTC.
+  date: string;
+  count: number;
 };
 
 // One write batch as it arrives from iOS — no per-mantra payload anymore,
@@ -261,7 +276,8 @@ function kotiRowFromDb(r: typeof schema.kotis.$inferSelect): KotiRow {
     startedAt: r.startedAt instanceof Date ? r.startedAt.toISOString() : String(r.startedAt),
     completedAt: r.completedAt instanceof Date ? r.completedAt.toISOString() : (r.completedAt ?? null) as string | null,
     locked: r.locked,
-    // Baselines aren't persisted yet; calibration step will set them.
+    goalDays: r.goalDays ?? 365,
+    reminderTimes: Array.isArray(r.reminderTimes) ? (r.reminderTimes as string[]) : ["pratah", "sandhya"],
     baselineCadenceMs: null,
     baselineVarianceMs: null,
   };
@@ -289,8 +305,10 @@ export async function createKoti(input: CreateKotiInput): Promise<KotiRow> {
       startedAt: new Date().toISOString(),
       completedAt: null,
       locked: true,
-      baselineCadenceMs: 180,
-      baselineVarianceMs: 45,
+      goalDays: 365,
+      reminderTimes: ["pratah", "sandhya"],
+      baselineCadenceMs: null,
+      baselineVarianceMs: null,
     };
     mem.kotis.set(id, row);
     mem.batches.set(id, []);
@@ -342,6 +360,67 @@ export async function getKotiById(id: string): Promise<KotiRow | null> {
   const db = getDb();
   const rows = await db.select().from(schema.kotis).where(eq(schema.kotis.id, id)).limit(1);
   const r = rows[0];
+  if (!r) return null;
+  return kotiRowFromDb(r);
+}
+
+/// Per-day mantra totals for the Pace screen's calendar. Aggregates the
+/// `entry_batches.count` column by the UTC date of `committed_first_at`
+/// (a batch never spans more than one writing session, so first ≈ last
+/// in practice — using `first` is enough). `days` caps the window; the
+/// design currently asks for 180.
+export async function getDailyCounts(kotiId: string, days: number): Promise<DailyCount[]> {
+  if (isTest()) {
+    const mem = memStore();
+    const batches = mem.batches.get(kotiId) ?? [];
+    const totals = new Map<string, number>();
+    for (const b of batches) {
+      const date = (new Date(b.committedFirstAt)).toISOString().slice(0, 10);
+      totals.set(date, (totals.get(date) ?? 0) + b.count);
+    }
+    return Array.from(totals.entries())
+      .map(([date, count]) => ({ date, count }))
+      .sort((a, b) => a.date.localeCompare(b.date));
+  }
+  const db = getDb();
+  const rows = await db.execute(sql`
+    SELECT to_char(date_trunc('day', committed_first_at AT TIME ZONE 'UTC'), 'YYYY-MM-DD') AS date,
+           SUM(count)::int AS count
+    FROM likhita.entry_batches
+    WHERE koti_id = ${kotiId}
+      AND committed_first_at >= NOW() - (${days} || ' days')::interval
+    GROUP BY 1
+    ORDER BY 1
+  `);
+  type Row = { date: string; count: number };
+  const out = (rows.rows ?? rows) as unknown as Row[];
+  return out.map((r) => ({ date: r.date, count: Number(r.count) }));
+}
+
+/// Partial-update the Pace fields on a koti. Both fields are independently
+/// optional; pass undefined for the ones you don't want to touch. Returns
+/// the post-update row (or null if the koti doesn't exist).
+export async function updateKotiPace(
+  id: string,
+  patch: { goalDays?: number; reminderTimes?: string[] },
+): Promise<KotiRow | null> {
+  if (isTest()) {
+    const mem = memStore();
+    const k = mem.kotis.get(id);
+    if (!k) return null;
+    if (patch.goalDays !== undefined) k.goalDays = patch.goalDays;
+    if (patch.reminderTimes !== undefined) k.reminderTimes = patch.reminderTimes;
+    return k;
+  }
+  const db = getDb();
+  const set: Record<string, unknown> = {};
+  if (patch.goalDays !== undefined) set.goalDays = patch.goalDays;
+  if (patch.reminderTimes !== undefined) set.reminderTimes = patch.reminderTimes;
+  if (Object.keys(set).length === 0) {
+    return getKotiById(id);
+  }
+  const updated = await db.update(schema.kotis).set(set).where(eq(schema.kotis.id, id)).returning();
+  const r = updated[0];
   if (!r) return null;
   return kotiRowFromDb(r);
 }

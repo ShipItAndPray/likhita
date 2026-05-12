@@ -44,10 +44,17 @@ for (const re of FORBIDDEN_PATTERNS) {
 
 const sql = neon(url);
 console.log(`Applying ${file} (${sqlText.length} bytes) …`);
-const statements = sqlText
+// Strip whole-line `--` comments before splitting so a statement that
+// happens to start the file or follow a comment block isn't swallowed
+// by the post-split `startsWith("--")` filter.
+const sanitized = sqlText
+  .split("\n")
+  .filter((line) => !line.trim().startsWith("--"))
+  .join("\n");
+const statements = sanitized
   .split(/;\s*$/m)
   .map((s) => s.trim())
-  .filter((s) => s.length > 0 && !s.startsWith("--"));
+  .filter((s) => s.length > 0);
 
 let i = 0;
 for (const stmt of statements) {
