@@ -54,52 +54,78 @@ final class MandatoryReleaseGateTests: XCTestCase {
 
     /// QA-SCENARIOS §2.2 — Sangha mantra survives type → kill → reopen.
     /// This is the specific scenario that regressed in build 1.0.10 and
-    /// triggered §25's existence. The test ensures the disk-persisted
-    /// queue catches a commit that the user can't flush in time.
+    /// triggered §25's existence. STRONG VERIFICATION: this test fetches
+    /// the live `/api/v1/shared/koti` snapshot before + after the
+    /// type-then-kill flow and asserts that `currentCount` strictly
+    /// increased by the number of mantras typed. A render-only check
+    /// (the previous version) passed spuriously even when no POST hit
+    /// the server.
     func test_2_2_sangha_commit_persists_across_immediate_kill() throws {
+        // Snapshot the server count BEFORE the test. We compare against
+        // this exact value at the end — the count must have advanced.
+        let countBefore = fetchSangaCount()
+        XCTAssertNotNil(countBefore, "Could not reach /api/v1/shared/koti before test")
+        guard let countBefore else { return }
+
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing", "--reset-state"]
         app.launchEnvironment["LIKHITA_START_SCREEN"] = "sharedWrite"
         app.launch()
 
-        // Wait for the keyboard to appear (the view auto-focuses on .task).
-        // typeText() before the keyboard is ready silently drops characters,
-        // which would make this test pass spuriously.
         let field = app.textFields.element(boundBy: 0)
         XCTAssertTrue(field.waitForExistence(timeout: 5),
                       "Sangha writing input field did not appear")
-        // Give SharedWritingView's .task block 0.5s to set inputFocused=true.
         sleep(1)
         field.tap()
-        // Sanity: keyboard should now be onscreen. Without it, typeText is a no-op.
         XCTAssertTrue(app.keyboards.element.waitForExistence(timeout: 3),
                       "Keyboard did not appear after focusing input — typeText would be silently dropped")
-        // Type one mantra. Exactly one commit must register.
+        // Type one mantra.
         field.typeText("srirama")
 
-        // Real proof of commit: the "written N in this session" label
-        // contains the digit 1. We avoid CONTAINS '1' (matches "1 crore"
-        // and tons of other text); instead match the literal label.
+        // Proof commitMantra() ran: the "written N in this session" label.
         let sessionLabel = app.staticTexts
             .matching(NSPredicate(format: "label MATCHES '.*written.*1.*session.*' OR label CONTAINS 'written 1'"))
             .firstMatch
-        let bumped = sessionLabel.waitForExistence(timeout: 4)
-        XCTAssertTrue(bumped, "Session counter did not show 'written 1 in this session' — commit didn't register")
+        XCTAssertTrue(sessionLabel.waitForExistence(timeout: 4),
+                      "Session counter did not show 'written 1' — handleInput never reached commitMantra")
 
-        // IMMEDIATELY kill the app (within the previous-bug window — the old
-        // 800ms debounce would have lost this commit).
+        // Immediately kill — no time for any natural debounced flush.
         app.terminate()
         app.launchEnvironment["LIKHITA_START_SCREEN"] = "sharedHub"
         app.launch()
-        // On relaunch the disk-persisted queue should drain. We check this
-        // indirectly via the hub rendering — the test that closes the loop
-        // (verifies a row landed in shared_entries) lives in the backend
-        // E2E test, not here. See `npm test -- shared-koti` in /backend.
-        let hubAppeared = app.staticTexts
-            .matching(NSPredicate(format: "label = 'The Foundation Koti' OR label = 'NAMES WRITTEN'"))
-            .firstMatch
-            .waitForExistence(timeout: 10)
-        XCTAssertTrue(hubAppeared, "Sangha hub did not render post-restart")
+
+        // Wait long enough for the on-init drainPersisted() Task to fire,
+        // load the queue from disk, POST, and refresh.
+        sleep(8)
+
+        // THE REAL ASSERTION: the server count grew.
+        let countAfter = fetchSangaCount()
+        XCTAssertNotNil(countAfter, "Could not reach /api/v1/shared/koti after test")
+        guard let countAfter else { return }
+        XCTAssertGreaterThan(
+            countAfter, countBefore,
+            "Sangha count did not advance after type + kill + reopen. before=\(countBefore) after=\(countAfter). Disk-persisted queue did not drain."
+        )
+    }
+
+    /// Synchronously GET /api/v1/shared/koti and return current_count.
+    /// Lives in the test so we can assert server-side state changed.
+    private func fetchSangaCount() -> Int? {
+        guard let url = URL(string: "https://likhita-kappa.vercel.app/api/v1/shared/koti") else { return nil }
+        var req = URLRequest(url: url)
+        req.setValue("likhita-rama", forHTTPHeaderField: "X-App-Origin")
+        let semaphore = DispatchSemaphore(value: 0)
+        var resultCount: Int?
+        URLSession.shared.dataTask(with: req) { data, _, _ in
+            defer { semaphore.signal() }
+            guard let data,
+                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let koti = obj["koti"] as? [String: Any],
+                  let c = koti["currentCount"] as? Int else { return }
+            resultCount = c
+        }.resume()
+        _ = semaphore.wait(timeout: .now() + 8)
+        return resultCount
     }
 
     /// QA-SCENARIOS §3.2 — Designer Jump is NOT visible in Release builds.

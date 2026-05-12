@@ -67,6 +67,11 @@ public struct SharedHubView: View {
         }
         .foregroundStyle(theme.page)
         .task {
+            // Drain any disk-persisted entries from a prior session BEFORE
+            // we render the count. This is the "I typed, force-quit, came
+            // back — make my entries land" path. Cheap when the queue is
+            // empty (file doesn't even exist).
+            await vm.flushNow()
             vm.startPolling()
             startTickerLoop()
         }

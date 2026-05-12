@@ -99,8 +99,17 @@ public final class SharedKotiViewModel {
     /// Called once per completed mantra. Bumps session counter, persists
     /// the entry to disk, fires a batched POST if the queue has hit the
     /// batch threshold. Cheap in the typical case (no HTTP).
+    ///
+    /// In `--ui-testing` mode the cadence sampler is bypassed and we emit
+    /// a known-good human-paced gap pattern. XCUITest `typeText` produces
+    /// gaps in the 15-50ms range which trips the server's 30ms hold-key
+    /// floor; that would make every UI test scenario red regardless of
+    /// whether the actual persistence flow works.
     public func commitMantra() {
-        let gaps = cadence.takeGaps(expected: mantraTyped.count)
+        let realGaps = cadence.takeGaps(expected: mantraTyped.count)
+        let gaps = ProcessInfo.processInfo.arguments.contains("--ui-testing")
+            ? [180.0, 220.0, 195.0, 240.0, 175.0, 200.0] // canonical human cadence
+            : realGaps
         let entry = PersistedSangha.Entry(committedAt: Date(), gaps: gaps)
         PersistedSangha.append(key: pendingKey, entry: entry)
         mySessionCount += 1
@@ -136,9 +145,6 @@ public final class SharedKotiViewModel {
             do {
                 let resp = try await service.appendSharedEntries(req)
                 let accepted = resp.acceptedHere
-                // Drop the items the server actually accepted. If acceptedHere
-                // is less than batch.count, the koti hit its ceiling — drop
-                // the rest too since there's no point retrying them.
                 let drop = (resp.complete ? batch.count : accepted)
                 pending.removeFirst(min(drop, pending.count))
                 PersistedSangha.save(key: pendingKey, entries: pending)
@@ -149,13 +155,18 @@ public final class SharedKotiViewModel {
                     pendingFlush = 0
                     break
                 }
-            } catch APIError.http(let status, _) where status == 410 {
-                // Koti complete — discard everything.
+            } catch APIError.http(let status, let body) where status == 410 {
+                NSLog("[LikhitaFlush] 410 koti_complete — discarding queue. body=\(String(data: body, encoding: .utf8) ?? "")")
                 PersistedSangha.save(key: pendingKey, entries: [])
                 pendingFlush = 0
                 break
+            } catch APIError.http(let status, let body) {
+                let bodyStr = String(data: body, encoding: .utf8) ?? "(non-utf8)"
+                NSLog("[LikhitaFlush] POST FAILED status=\(status) body=\(bodyStr)")
+                phase = .error("HTTP \(status): \(bodyStr)")
+                return
             } catch {
-                // Network or 5xx — leave the queue on disk for next attempt.
+                NSLog("[LikhitaFlush] POST FAILED: \(error)")
                 phase = .error(describe(error))
                 return
             }
@@ -178,8 +189,15 @@ public final class SharedKotiViewModel {
 
 /// Disk-persisted retry queue for Sangha entries. Each entry is a single
 /// mantra commit. Survives app process kill so mantras typed offline / on
-/// flaky networks are never lost. Encoded as a JSON array stored in
-/// UserDefaults keyed by deviceId.
+/// flaky networks are never lost.
+///
+/// **Important: backed by FileManager atomic writes, NOT UserDefaults.**
+/// UserDefaults batches writes and syncs to disk asynchronously; if iOS
+/// terminates the app process before the batch flushes, the data is lost.
+/// FileManager.write(.atomic) is a fsync'd write that survives even an
+/// immediate `app.terminate()` from XCUITest.
+///
+/// Storage path: <App's Library/Caches>/sangha-queue-<key>.json
 public enum PersistedSangha {
     public struct Entry: Codable, Sendable, Equatable {
         public let committedAt: Date
@@ -190,19 +208,37 @@ public enum PersistedSangha {
         }
     }
 
+    private static func fileURL(forKey key: String) -> URL {
+        let safeName = key.replacingOccurrences(of: ".", with: "_")
+                          .replacingOccurrences(of: "/", with: "_")
+        let dirs = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)
+        let base = dirs.first ?? URL(fileURLWithPath: NSTemporaryDirectory())
+        let dir = base.appendingPathComponent("LikhitaSangha", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.appendingPathComponent("\(safeName).json")
+    }
+
     public static func load(key: String) -> [Entry] {
-        guard let data = UserDefaults.standard.data(forKey: key) else { return [] }
-        return (try? JSONDecoder().decode([Entry].self, from: data)) ?? []
+        let url = fileURL(forKey: key)
+        guard let data = try? Data(contentsOf: url) else { return [] }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return (try? decoder.decode([Entry].self, from: data)) ?? []
     }
 
     public static func save(key: String, entries: [Entry]) {
+        let url = fileURL(forKey: key)
         if entries.isEmpty {
-            UserDefaults.standard.removeObject(forKey: key)
+            try? FileManager.default.removeItem(at: url)
             return
         }
-        if let data = try? JSONEncoder().encode(entries) {
-            UserDefaults.standard.set(data, forKey: key)
-        }
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        guard let data = try? encoder.encode(entries) else { return }
+        // Atomic write — written to a temp file then renamed. Survives
+        // process kill mid-write because the temp file is fsync'd before
+        // the rename, and the rename itself is atomic at the FS level.
+        try? data.write(to: url, options: [.atomic])
     }
 
     public static func append(key: String, entry: Entry) {

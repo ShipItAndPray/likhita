@@ -37,13 +37,18 @@ public actor APIClient {
         self.tokenProvider = tokenProvider
         self.extraHeaders = extraHeaders
 
+        // Wire-format contract: every backend route uses **camelCase** keys
+        // in both request and response bodies (matches the Drizzle schema /
+        // Zod input/output types). Do NOT convert to/from snake_case —
+        // doing that silently mismatches the Zod validators and produces
+        // 400 "Required" errors for every multi-word field. Bug we hit
+        // 2026-05-12 in the Sangha POST: `device_id` reached the server
+        // when the schema expected `deviceId`.
         let dec = JSONDecoder()
-        dec.keyDecodingStrategy = .convertFromSnakeCase
         dec.dateDecodingStrategy = .iso8601
         self.decoder = dec
 
         let enc = JSONEncoder()
-        enc.keyEncodingStrategy = .convertToSnakeCase
         enc.dateEncodingStrategy = .iso8601
         self.encoder = enc
     }

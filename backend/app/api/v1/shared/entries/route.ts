@@ -29,11 +29,17 @@ const EntryItem = z.object({
   }),
 });
 
+// Optional + nullable: iOS Swift's default Encodable emits `null` for nil
+// Optionals by default; accept that as equivalent to absence so anonymous
+// posts from the device don't fail validation.
+const optionalNullableString = (min: number, max: number) =>
+  z.union([z.string().min(min).max(max), z.null()]).optional();
+
 const Body = z.object({
   deviceId: z.string().min(4).max(128),
-  displayName: z.string().min(1).max(80).optional(),
-  place: z.string().min(1).max(80).optional(),
-  country: z.string().min(2).max(80).optional(),
+  displayName: optionalNullableString(1, 80),
+  place: optionalNullableString(1, 80),
+  country: optionalNullableString(2, 80),
   entries: z.array(EntryItem).min(1).max(50),
 });
 

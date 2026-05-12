@@ -89,6 +89,9 @@ public struct ThresholdView: View {
         }
         .foregroundStyle(theme.textPrimary)
         .task {
+            // Drain any leftover Sangha entries before showing live counts.
+            // Cheap when queue is empty.
+            await sangha.flushNow()
             sangha.startPolling()
         }
         .onDisappear {
