@@ -83,6 +83,20 @@ targets:
       - package: KotiThemes
       - package: KotiL10n
 
+  # ── LikhitaRama UI tests (mandatory release gate, see SKILL.md §25) ─────
+  LikhitaRamaUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: LikhitaRamaUITests
+    dependencies:
+      - target: LikhitaRama
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: org.likhita.rama.uitests
+        TEST_TARGET_NAME: LikhitaRama
+        DEVELOPMENT_TEAM: "WS486NY2HV"
+
   # ── LikhitaRam (Hindi) ───────────────────────────────────────────────────
   LikhitaRam:
     type: application
@@ -109,11 +123,26 @@ targets:
       - package: KotiThemes
       - package: KotiL10n
 
+  # ── LikhitaRam UI tests (mandatory release gate, see SKILL.md §25) ──────
+  LikhitaRamUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: LikhitaRamUITests
+    dependencies:
+      - target: LikhitaRam
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: org.likhita.ram.uitests
+        TEST_TARGET_NAME: LikhitaRam
+        DEVELOPMENT_TEAM: "WS486NY2HV"
+
 schemes:
   LikhitaRama:
     build:
       targets:
         LikhitaRama: all
+        LikhitaRamaUITests: [test]
     run:
       config: Debug
     archive:
@@ -122,11 +151,14 @@ schemes:
       config: Release
     test:
       config: Debug
+      targets:
+        - LikhitaRamaUITests
 
   LikhitaRam:
     build:
       targets:
         LikhitaRam: all
+        LikhitaRamUITests: [test]
     run:
       config: Debug
     archive:
@@ -135,3 +167,5 @@ schemes:
       config: Release
     test:
       config: Debug
+      targets:
+        - LikhitaRamUITests
