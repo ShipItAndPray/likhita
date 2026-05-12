@@ -130,8 +130,10 @@ public final class SharedKotiViewModel {
                 place: nil,
                 country: nil,
                 count: chunkCount,
-                committedFirstAt: pending.committedFirstAt,
-                committedLastAt: pending.committedLastAt
+                // Bucket by the day the *first* mantra in this batch was
+                // committed locally. Sessions that straddle midnight get
+                // counted on the start day — same convention as Personal.
+                date: pending.committedFirstAt.asLocalYMD()
             )
             do {
                 let resp = try await service.appendSharedEntries(req)

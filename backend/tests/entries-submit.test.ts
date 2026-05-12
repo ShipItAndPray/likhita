@@ -27,13 +27,10 @@ function ctx(kid: string = kotiId) {
 const sessionId = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
 
 function batch(count: number) {
-  const now = new Date();
-  const start = new Date(now.getTime() - count * 1000);
   return {
     count,
     clientSessionId: sessionId,
-    committedFirstAt: start.toISOString(),
-    committedLastAt: now.toISOString(),
+    date: new Date().toISOString().slice(0, 10),
   };
 }
 

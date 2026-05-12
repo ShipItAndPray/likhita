@@ -81,14 +81,13 @@ describe("Pace endpoints", () => {
   });
 
   it("GET /calendar returns daily totals for the koti", async () => {
-    const now = new Date();
+    const today = new Date().toISOString().slice(0, 10);
     for (let i = 0; i < 3; i += 1) {
       const body = {
         idempotencyKey: `test-pace-${i}-${Date.now()}`,
         count: 10,
         clientSessionId: TEST_SESSION,
-        committedFirstAt: now.toISOString(),
-        committedLastAt: now.toISOString(),
+        date: today,
       };
       const r = await postEntries(
         req(`http://localhost/api/v1/kotis/${kotiId}/entries`, { method: "POST", body: JSON.stringify(body) }),
@@ -101,6 +100,6 @@ describe("Pace endpoints", () => {
     const body = (await res.json()) as { days: number; daily: { date: string; count: number }[] };
     expect(body.days).toBe(30);
     expect(body.daily.length).toBe(1);
-    expect(body.daily[0].count).toBe(30);
+    expect(body.daily[0]?.count).toBe(30);
   });
 });

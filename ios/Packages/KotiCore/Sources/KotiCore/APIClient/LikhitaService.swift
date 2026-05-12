@@ -90,6 +90,10 @@ public actor LikhitaService {
         public let dedicationTo: String?
         public let locked: Bool?
         public let completedAt: Date?
+        // Pace fields (added 2026-05-12). Optional so older server
+        // responses still decode cleanly while a deploy rolls out.
+        public let goalDays: Int?
+        public let reminderTimes: [String]?
     }
 
     public struct GetKotiResponse: Decodable, Sendable {
@@ -117,23 +121,35 @@ public actor LikhitaService {
 
     // MARK: - Entries (batch summary, one POST per session)
 
-    /// One batch summary. Replaces the old per-entry payload — the server
-    /// no longer needs per-mantra cadence (anti-cheat dropped) or sequence
-    /// numbers (server derives from current_count + 1).
+    /// One batch summary. Server UPSERTs into daily_counts keyed on
+    /// (koti_id, date), so multiple writing sessions on the same local
+    /// day collapse into one DB row. `date` is the device's local
+    /// calendar date — derive with `LikhitaService.todayLocalDate()`.
     public struct SubmitBatchRequest: Encodable, Sendable {
         public let idempotencyKey: String
         public let count: Int
         public let clientSessionId: String
-        public let committedFirstAt: String   // ISO-8601
-        public let committedLastAt: String    // ISO-8601
+        public let date: String   // YYYY-MM-DD local
 
-        public init(idempotencyKey: String, count: Int, clientSessionId: String, committedFirstAt: Date, committedLastAt: Date) {
+        public init(idempotencyKey: String, count: Int, clientSessionId: String, date: String) {
             self.idempotencyKey = idempotencyKey
             self.count = count
             self.clientSessionId = clientSessionId
-            self.committedFirstAt = ISO8601DateFormatter.standard.string(from: committedFirstAt)
-            self.committedLastAt = ISO8601DateFormatter.standard.string(from: committedLastAt)
+            self.date = date
         }
+    }
+
+    /// Today's date in the device's local calendar, formatted YYYY-MM-DD.
+    /// Use this when building a SubmitBatchRequest or SharedAppendRequest
+    /// so the server's per-day row keying matches what the user actually
+    /// experienced as "today".
+    public static func todayLocalDate() -> String {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        f.calendar = Calendar(identifier: .gregorian)
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = .current
+        return f.string(from: Date())
     }
 
     public struct SubmitBatchResponse: Decodable, Sendable {
@@ -201,8 +217,7 @@ public actor LikhitaService {
         public let place: String?
         public let country: String?
         public let count: Int
-        public let committedFirstAt: String
-        public let committedLastAt: String
+        public let date: String   // YYYY-MM-DD local
 
         public init(
             deviceId: String,
@@ -210,16 +225,14 @@ public actor LikhitaService {
             place: String? = nil,
             country: String? = nil,
             count: Int,
-            committedFirstAt: Date,
-            committedLastAt: Date
+            date: String
         ) {
             self.deviceId = deviceId
             self.displayName = displayName
             self.place = place
             self.country = country
             self.count = count
-            self.committedFirstAt = ISO8601DateFormatter.standard.string(from: committedFirstAt)
-            self.committedLastAt = ISO8601DateFormatter.standard.string(from: committedLastAt)
+            self.date = date
         }
     }
 
@@ -233,6 +246,46 @@ public actor LikhitaService {
     public func appendSharedEntries(_ req: SharedAppendRequest) async throws -> SharedAppendResponse {
         try await api.post("/api/v1/shared/entries", body: req)
     }
+
+    // MARK: - Pace (calendar + goal/reminders)
+
+    public struct CalendarDay: Decodable, Sendable, Equatable {
+        public let date: String   // YYYY-MM-DD
+        public let count: Int
+    }
+
+    public struct CalendarResponse: Decodable, Sendable {
+        public let days: Int
+        public let daily: [CalendarDay]
+    }
+
+    /// GET /api/v1/kotis/{id}/calendar?days=N
+    /// Returns the user's per-day mantra contributions for the last N
+    /// days. Source: the daily_counts table — primary-key range scan.
+    public func getCalendar(kotiId: String, days: Int = 180) async throws -> CalendarResponse {
+        try await api.get("/api/v1/kotis/\(kotiId)/calendar?days=\(days)")
+    }
+
+    public struct UpdatePaceRequest: Encodable, Sendable {
+        public let goalDays: Int?
+        public let reminderTimes: [String]?
+        public init(goalDays: Int? = nil, reminderTimes: [String]? = nil) {
+            self.goalDays = goalDays
+            self.reminderTimes = reminderTimes
+        }
+    }
+
+    public struct UpdatePaceResponse: Decodable, Sendable {
+        public let goalDays: Int
+        public let reminderTimes: [String]
+    }
+
+    /// PATCH /api/v1/kotis/{id}/pace
+    /// Partial update of the Pace fields. Either or both fields may be
+    /// nil — server only touches the ones you send.
+    public func updatePace(kotiId: String, request: UpdatePaceRequest) async throws -> UpdatePaceResponse {
+        try await api.patch("/api/v1/kotis/\(kotiId)/pace", body: request)
+    }
 }
 
 extension ISO8601DateFormatter {
@@ -241,4 +294,18 @@ extension ISO8601DateFormatter {
         f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return f
     }()
+}
+
+extension Date {
+    /// Local YYYY-MM-DD for this date. Used to bucket batches into the
+    /// server's `daily_counts` table on the calendar day the user
+    /// actually experienced.
+    public func asLocalYMD() -> String {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        f.calendar = Calendar(identifier: .gregorian)
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = .current
+        return f.string(from: self)
+    }
 }

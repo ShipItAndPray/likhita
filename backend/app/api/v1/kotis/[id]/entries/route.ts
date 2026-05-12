@@ -24,12 +24,16 @@ const Param = z.object({ id: z.string().uuid() });
 // `count` upper bound is 1008 (a Nitya), the largest devotional batch
 // pattern. Anything above that is almost certainly a script — and even
 // if it's not, the client should split.
+/// Personal koti write batch. `date` is the user's local date as
+/// YYYY-MM-DD — the server UPSERTs into daily_counts keyed on
+/// (koti_id, date) so multiple sessions on the same day produce one
+/// row, not N. iOS must derive `date` from the device's local calendar
+/// before posting (`DateFormatter` with `Locale.current` + `Calendar.current`).
 const Body = z.object({
   idempotencyKey: z.string(),
   count: z.number().int().positive().max(1008),
   clientSessionId: z.string().uuid(),
-  committedFirstAt: z.string().datetime(),
-  committedLastAt: z.string().datetime(),
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "expected YYYY-MM-DD"),
 });
 
 export async function POST(
@@ -97,8 +101,7 @@ export async function POST(
         endSequence,
         count: accepted,
         clientSessionId: body.clientSessionId,
-        committedFirstAt: body.committedFirstAt,
-        committedLastAt: body.committedLastAt,
+        date: body.date,
       },
     });
 

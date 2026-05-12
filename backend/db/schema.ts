@@ -5,6 +5,7 @@ import {
   bigint,
   boolean,
   timestamp,
+  date,
   jsonb,
   integer,
   index,
@@ -93,36 +94,32 @@ export const kotis = pgTable(
   }),
 );
 
-// Batched entry storage. One row per API POST. Each row is a *summary*
-// of all the mantras typed in that batch — count + sequence range + time
-// range — not a JSONB blob of per-mantra records. Anti-cheat was dropped
-// because the practice is voluntary and devotional (the user noted: "it's
-// the god who is going to enforce it"), so we no longer need cadence
-// fingerprints or per-entry rows. Storage: ~80 bytes/row, ~200 rows for
-// a Lakh koti.
-//
-// `start_sequence`..`end_sequence` is inclusive. The UNIQUE constraint
-// on (koti_id, start_sequence) keeps batch heads distinct; the route
-// handler enforces continuity (the next batch's start must equal the
-// koti's current_count + 1).
-export const entryBatches = pgTable(
-  "entry_batches",
+// One row per (koti, local-date). UPSERT-style write: the route handler
+// adds the incoming batch's `count` to whatever already exists for that
+// day, atomically. Replaces the previous `entry_batches` design (one
+// row per API POST) because at the 1000-user target it produces ~5x
+// more rows than necessary. With this design:
+//   - Lakh user: ~200 rows (one per active day)
+//   - Crore user: ~3,650 rows (one per active day)
+//   - Calendar query is a primary-key range scan, no GROUP BY.
+//   - Timezone is owned by the client — `date` is a DATE column stored
+//     in whatever local calendar the user is writing under, set at
+//     write time. No `AT TIME ZONE` math at read time.
+export const dailyCounts = pgTable(
+  "daily_counts",
   {
-    id: uuid("id").primaryKey().defaultRandom(),
     kotiId: uuid("koti_id")
       .notNull()
       .references(() => kotis.id, { onDelete: "cascade" }),
-    startSequence: bigint("start_sequence", { mode: "number" }).notNull(),
-    endSequence: bigint("end_sequence", { mode: "number" }).notNull(),
+    date: date("date").notNull(),
     count: integer("count").notNull(),
+    firstSeq: bigint("first_seq", { mode: "number" }).notNull(),
+    lastSeq: bigint("last_seq", { mode: "number" }).notNull(),
     clientSessionId: uuid("client_session_id"),
-    committedFirstAt: timestamp("committed_first_at", { withTimezone: true }).notNull(),
-    committedLastAt: timestamp("committed_last_at", { withTimezone: true }).notNull(),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => ({
-    kotiStart: index("entry_batches_koti_start").on(t.kotiId, t.startSequence),
-    uniqueStart: unique("entry_batches_koti_start_unique").on(t.kotiId, t.startSequence),
+    pk: primaryKey({ columns: [t.kotiId, t.date] }),
   }),
 );
 
@@ -222,35 +219,29 @@ export const sharedKotis = pgTable("shared_kotis", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
-// Sangha equivalent of entry_batches. One row per API POST. Summary
-// only — no per-mantra JSONB, no cadence fingerprint. Includes the
-// device/identity fields required for the Sangha hub's writer ticker
-// and country breakdown.
-export const sharedEntryBatches = pgTable(
-  "shared_entry_batches",
+// Sangha equivalent of `daily_counts`. One row per
+// (shared_koti, device, local-date). Display fields (name, place,
+// country) are denormalized so the hub's writer ticker + country tile
+// don't need to join anything. Row count for 1000 active devotees
+// writing daily for a year: 365,000 rows, ~30 MB.
+export const sharedDailyCounts = pgTable(
+  "shared_daily_counts",
   {
-    id: uuid("id").primaryKey().defaultRandom(),
     sharedKotiId: uuid("shared_koti_id")
       .notNull()
       .references(() => sharedKotis.id, { onDelete: "cascade" }),
-    // Stable per-device identifier — used to compute unique-writer count
-    // without requiring authentication. iOS sends KotiStore.stableUserId().
     deviceId: text("device_id").notNull(),
-    // Display name + place are optional and per-batch (the user may
-    // change them between writing sessions). If both blank we render
-    // the contribution as "Anonymous".
+    date: date("date").notNull(),
+    count: integer("count").notNull(),
     displayName: text("display_name"),
     place: text("place"),
     country: text("country"),
-    count: integer("count").notNull(),
-    committedFirstAt: timestamp("committed_first_at", { withTimezone: true }).notNull(),
-    committedLastAt: timestamp("committed_last_at", { withTimezone: true }).notNull(),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => ({
-    kotiTs: index("shared_entry_batches_koti_ts").on(t.sharedKotiId, t.committedLastAt),
-    deviceIdx: index("shared_entry_batches_device").on(t.deviceId),
-    countryIdx: index("shared_entry_batches_country").on(t.sharedKotiId, t.country),
+    pk: primaryKey({ columns: [t.sharedKotiId, t.deviceId, t.date] }),
+    kotiUpdated: index("shared_daily_counts_koti_updated").on(t.sharedKotiId, t.updatedAt),
+    countryIdx: index("shared_daily_counts_country").on(t.sharedKotiId, t.country),
   }),
 );
 
@@ -258,12 +249,12 @@ export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
 export type Koti = typeof kotis.$inferSelect;
 export type NewKoti = typeof kotis.$inferInsert;
-export type EntryBatch = typeof entryBatches.$inferSelect;
-export type NewEntryBatch = typeof entryBatches.$inferInsert;
+export type DailyCount = typeof dailyCounts.$inferSelect;
+export type NewDailyCount = typeof dailyCounts.$inferInsert;
 export type Payment = typeof payments.$inferSelect;
 export type ShipBatch = typeof shipBatches.$inferSelect;
 export type Device = typeof devices.$inferSelect;
 export type SharedKoti = typeof sharedKotis.$inferSelect;
 export type NewSharedKoti = typeof sharedKotis.$inferInsert;
-export type SharedEntryBatch = typeof sharedEntryBatches.$inferSelect;
-export type NewSharedEntryBatch = typeof sharedEntryBatches.$inferInsert;
+export type SharedDailyCount = typeof sharedDailyCounts.$inferSelect;
+export type NewSharedDailyCount = typeof sharedDailyCounts.$inferInsert;

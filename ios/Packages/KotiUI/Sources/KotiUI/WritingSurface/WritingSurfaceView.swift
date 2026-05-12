@@ -307,6 +307,12 @@ public struct KotiSession: Sendable, Hashable {
     public var modeKey: String
     public var daysActive: Int
     public var dedicationText: String
+    /// User-chosen completion horizon (30..730 days). Drives the daily
+    /// target on the writing surface and the slider on the Pace screen.
+    public var goalDays: Int
+    /// Notification slot ids, subset of:
+    /// `brahma`, `pratah`, `madhyana`, `sandhya`. At most 3.
+    public var reminderTimes: [String]
 
     public init(
         name: String,
@@ -316,7 +322,9 @@ public struct KotiSession: Sendable, Hashable {
         theme: ThemeKey,
         modeKey: String,
         daysActive: Int,
-        dedicationText: String
+        dedicationText: String,
+        goalDays: Int = 365,
+        reminderTimes: [String] = ["pratah", "sandhya"]
     ) {
         self.name = name
         self.count = count
@@ -326,6 +334,8 @@ public struct KotiSession: Sendable, Hashable {
         self.modeKey = modeKey
         self.daysActive = daysActive
         self.dedicationText = dedicationText
+        self.goalDays = goalDays
+        self.reminderTimes = reminderTimes
     }
 
     public var progress: Double {

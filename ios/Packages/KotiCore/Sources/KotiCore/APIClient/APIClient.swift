@@ -70,6 +70,17 @@ public actor APIClient {
         return try await execute(request: request)
     }
 
+    /// `PATCH /v1/<path>` with JSON body, returning `T`.
+    public func patch<Body: Encodable, T: Decodable>(
+        _ path: String,
+        body: Body,
+        as: T.Type = T.self
+    ) async throws -> T {
+        let data = try encoder.encode(body)
+        let request = try await buildRequest(path: path, method: "PATCH", body: data)
+        return try await execute(request: request)
+    }
+
     // MARK: - Internal
 
     private func buildRequest(

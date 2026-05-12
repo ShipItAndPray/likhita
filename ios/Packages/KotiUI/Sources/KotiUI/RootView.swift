@@ -21,6 +21,10 @@ public struct RootView: View {
     @State private var viewModel: KotiViewModel
     @State private var sharedVM: SharedKotiViewModel
     @State private var didTryResume: Bool = false
+    /// Pace screen — per-day mantra counts for the calendar. Populated by
+    /// GET /v1/kotis/<id>/calendar when the user enters Pace.
+    @State private var paceHistory: [(date: Date, count: Int)] = []
+    @State private var paceLoading: Bool = false
 
     public init(config: any AppConfiguration) {
         self.config = config
@@ -245,7 +249,7 @@ public struct RootView: View {
                 onKeystroke: { viewModel.recordKeystroke() },
                 onOpenPath: { withAnimation { pathOverlayOpen = true } },
                 onThreshold: { route = .threshold },
-                onPause: { route = .settings },
+                onPause: { route = .pace },
                 onComplete: { route = .completion },
                 onFlush: { Task { await viewModel.flushNow() } }
             )
@@ -287,7 +291,83 @@ public struct RootView: View {
                     if let r = Route(jumpKey: key) { route = r }
                 }
             )
+        case .pace:
+            PaceScreen(
+                tradition: tradition,
+                theme: theme,
+                koti: $session,
+                dailyHistory: paceHistory,
+                onGoalDaysChanged: { newDays in
+                    session.goalDays = newDays
+                    Task { await pushPaceUpdate(goalDays: newDays, reminderTimes: nil) }
+                },
+                onRemindersChanged: { slots in
+                    session.reminderTimes = slots
+                    Task {
+                        await pushPaceUpdate(goalDays: nil, reminderTimes: slots)
+                        await scheduleReminders(slots)
+                    }
+                },
+                onBack: { route = .writing },
+                onThreshold: { route = .threshold }
+            )
+            .task(id: viewModel.serverKotiId) {
+                await loadPaceHistory()
+            }
         }
+    }
+
+    /// PATCH /v1/kotis/{id}/pace. Best-effort; if the server fails the
+    /// local session change still stands and we'll re-sync on the next
+    /// koti refresh.
+    private func pushPaceUpdate(goalDays: Int?, reminderTimes: [String]?) async {
+        guard let id = viewModel.serverKotiId else { return }
+        do {
+            _ = try await viewModel.service.updatePace(
+                kotiId: id,
+                request: LikhitaService.UpdatePaceRequest(
+                    goalDays: goalDays,
+                    reminderTimes: reminderTimes
+                )
+            )
+        } catch {
+            // Silent — pace is not load-bearing for writing; the next
+            // koti GET will reconcile if needed.
+        }
+    }
+
+    /// Fetch the last 180 days of daily counts and store them on
+    /// `paceHistory`. Caller is the Pace screen's .task.
+    private func loadPaceHistory() async {
+        guard let id = viewModel.serverKotiId else {
+            paceHistory = []
+            return
+        }
+        paceLoading = true
+        defer { paceLoading = false }
+        do {
+            let resp = try await viewModel.service.getCalendar(kotiId: id, days: 180)
+            let f = DateFormatter()
+            f.dateFormat = "yyyy-MM-dd"
+            f.calendar = Calendar(identifier: .gregorian)
+            f.locale = Locale(identifier: "en_US_POSIX")
+            f.timeZone = .current
+            paceHistory = resp.daily.compactMap { day in
+                guard let d = f.date(from: day.date) else { return nil }
+                return (date: d, count: day.count)
+            }
+        } catch {
+            // Leave whatever was last loaded; Pace renders a sparse
+            // calendar rather than erroring out.
+        }
+    }
+
+    /// Replace the iOS local-notification schedule with one repeating
+    /// daily UNUserNotification per enabled reminder slot. iOS clamps to
+    /// at most ~64 pending requests; we use 4 slot ids max with a stable
+    /// id prefix so we can re-issue cleanly.
+    private func scheduleReminders(_ slots: [String]) async {
+        await LikhitaReminders.reschedule(slots: slots, tradition: config.tradition)
     }
 
     private func startWriting() async {
@@ -365,6 +445,7 @@ extension RootView {
         case threshold
         case welcome, identity, dedication, stylus, pledge
         case writing, completion, book, ship, status, settings
+        case pace
         case sharedHub, sharedWrite, sharedHands
 
         init?(jumpKey: String) {
@@ -385,6 +466,7 @@ extension RootView {
             case "ship":       self = .ship
             case "status":     self = .status
             case "settings":   self = .settings
+            case "pace":       self = .pace
             default:           return nil
             }
         }

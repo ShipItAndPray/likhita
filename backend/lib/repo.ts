@@ -89,16 +89,15 @@ export type DailyCount = {
   count: number;
 };
 
-// One write batch as it arrives from iOS — no per-mantra payload anymore,
-// just the count + the time range covered. Anti-cheat was removed (the
-// practice is voluntary; "it's the god who is going to enforce it").
+// One write batch as it arrives from iOS. `date` is the user's local
+// calendar date (YYYY-MM-DD); the server UPSERTs into daily_counts so
+// multiple writing sessions on the same day collapse into one row.
 export type EntryBatchInsert = {
   startSequence: number;
   endSequence: number;
   count: number;
   clientSessionId: string;
-  committedFirstAt: string;
-  committedLastAt: string;
+  date: string;   // YYYY-MM-DD, local
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -116,7 +115,8 @@ function isTest(): boolean {
 type Mem = {
   users: Map<string, UserRow & { gotra?: string; nativePlace?: string; phone?: string; uiLanguage?: string }>;
   kotis: Map<string, KotiRow>;
-  batches: Map<string, EntryBatchInsert[]>; // keyed by koti id
+  /// koti id → (date → count). Mirrors the daily_counts table for tests.
+  dailyCounts: Map<string, Map<string, number>>;
   idem: Map<string, { hash: string; response: unknown }>; // key = `${kotiId}:${idemKey}`
 };
 
@@ -126,7 +126,7 @@ function memStore(): Mem {
     g.__likhitaMem = {
       users: new Map(),
       kotis: new Map(),
-      batches: new Map(),
+      dailyCounts: new Map(),
       idem: new Map(),
     };
   }
@@ -311,7 +311,7 @@ export async function createKoti(input: CreateKotiInput): Promise<KotiRow> {
       baselineVarianceMs: null,
     };
     mem.kotis.set(id, row);
-    mem.batches.set(id, []);
+    mem.dailyCounts.set(id, new Map());
     return row;
   }
 
@@ -369,28 +369,24 @@ export async function getKotiById(id: string): Promise<KotiRow | null> {
 /// (a batch never spans more than one writing session, so first ≈ last
 /// in practice — using `first` is enough). `days` caps the window; the
 /// design currently asks for 180.
+/// Per-day mantra totals for the Pace screen. Reads directly from
+/// `daily_counts` — no GROUP BY at query time, no aggregation. The
+/// daily row is the source of truth (UPSERT'd at write time), so the
+/// calendar is always a primary-key range scan.
 export async function getDailyCounts(kotiId: string, days: number): Promise<DailyCount[]> {
   if (isTest()) {
-    const mem = memStore();
-    const batches = mem.batches.get(kotiId) ?? [];
-    const totals = new Map<string, number>();
-    for (const b of batches) {
-      const date = (new Date(b.committedFirstAt)).toISOString().slice(0, 10);
-      totals.set(date, (totals.get(date) ?? 0) + b.count);
-    }
-    return Array.from(totals.entries())
+    const rows = memStore().dailyCounts.get(kotiId) ?? new Map<string, number>();
+    return Array.from(rows.entries())
       .map(([date, count]) => ({ date, count }))
       .sort((a, b) => a.date.localeCompare(b.date));
   }
   const db = getDb();
   const rows = await db.execute(sql`
-    SELECT to_char(date_trunc('day', committed_first_at AT TIME ZONE 'UTC'), 'YYYY-MM-DD') AS date,
-           SUM(count)::int AS count
-    FROM likhita.entry_batches
+    SELECT to_char(date, 'YYYY-MM-DD') AS date, count
+    FROM likhita.daily_counts
     WHERE koti_id = ${kotiId}
-      AND committed_first_at >= NOW() - (${days} || ' days')::interval
-    GROUP BY 1
-    ORDER BY 1
+      AND date >= (CURRENT_DATE - (${days} || ' days')::interval)
+    ORDER BY date
   `);
   type Row = { date: string; count: number };
   const out = (rows.rows ?? rows) as unknown as Row[];
@@ -498,9 +494,9 @@ export async function commitBatch(input: CommitBatchInput): Promise<CommitBatchR
     if (k.currentCount >= k.targetCount && !k.completedAt) {
       k.completedAt = new Date().toISOString();
     }
-    const list = mem.batches.get(input.kotiId) ?? [];
-    list.push(input.batch);
-    mem.batches.set(input.kotiId, list);
+    const byDay = mem.dailyCounts.get(input.kotiId) ?? new Map<string, number>();
+    byDay.set(input.batch.date, (byDay.get(input.batch.date) ?? 0) + input.batch.count);
+    mem.dailyCounts.set(input.kotiId, byDay);
     return { ok: true, currentCount: k.currentCount };
   }
 
@@ -510,7 +506,6 @@ export async function commitBatch(input: CommitBatchInput): Promise<CommitBatchR
     .update(schema.kotis)
     .set({
       currentCount: input.newCount,
-      // Stamp completion atomically when target is reached.
       completedAt: sql`CASE WHEN ${input.newCount} >= target_count AND completed_at IS NULL THEN NOW() ELSE completed_at END`,
     })
     .where(
@@ -526,15 +521,21 @@ export async function commitBatch(input: CommitBatchInput): Promise<CommitBatchR
     return { ok: false, reason: "concurrent_update" };
   }
 
-  await db.insert(schema.entryBatches).values({
-    kotiId: input.kotiId,
-    startSequence: input.batch.startSequence,
-    endSequence: input.batch.endSequence,
-    count: input.batch.count,
-    clientSessionId: input.batch.clientSessionId,
-    committedFirstAt: new Date(input.batch.committedFirstAt),
-    committedLastAt: new Date(input.batch.committedLastAt),
-  });
+  // UPSERT into daily_counts. Multiple writing sessions on the same local
+  // day collapse into one row, so a Lakh user has ~200 rows total
+  // (one per active day) instead of one per POST.
+  await db.execute(sql`
+    INSERT INTO likhita.daily_counts
+      (koti_id, date, count, first_seq, last_seq, client_session_id, updated_at)
+    VALUES
+      (${input.kotiId}, ${input.batch.date}, ${input.batch.count},
+       ${input.batch.startSequence}, ${input.batch.endSequence},
+       ${input.batch.clientSessionId}, NOW())
+    ON CONFLICT (koti_id, date) DO UPDATE
+      SET count = likhita.daily_counts.count + EXCLUDED.count,
+          last_seq = EXCLUDED.last_seq,
+          updated_at = NOW()
+  `);
 
   return { ok: true, currentCount: Number(updatedRow.currentCount) };
 }
@@ -571,8 +572,10 @@ export type SharedAppendInput = {
   place: string | null;
   country: string | null;
   count: number;
-  committedFirstAt: string;
-  committedLastAt: string;
+  /// User's local date for this batch (YYYY-MM-DD). The row is UPSERT'd
+  /// into shared_daily_counts keyed on (shared_koti_id, device_id, date)
+  /// so multiple sessions on the same day collapse.
+  date: string;
 };
 
 export type SharedAppendResult = {
@@ -633,26 +636,26 @@ export async function getSharedHubSnapshot(): Promise<SharedHubSnapshot> {
 
   if (isTest()) {
     const mem = sharedMemStore();
-    const batches = mem.batches;
-    const uniqueDevices = new Set(batches.map((b) => b.deviceId)).size;
-    const uniqueCountries = new Set(batches.map((b) => b.country).filter(Boolean)).size;
+    const rows = mem.rows;
+    const uniqueDevices = new Set(rows.map((r) => r.deviceId)).size;
+    const uniqueCountries = new Set(rows.map((r) => r.country).filter(Boolean)).size;
     const countByDeviceName = new Map<string, number>();
     const countByCountry = new Map<string, number>();
-    for (const b of batches) {
-      const key = `${b.displayName ?? "Anonymous"}|${b.place ?? ""}`;
-      countByDeviceName.set(key, (countByDeviceName.get(key) ?? 0) + b.count);
-      if (b.country) countByCountry.set(b.country, (countByCountry.get(b.country) ?? 0) + b.count);
+    for (const r of rows) {
+      const key = `${r.displayName ?? "Anonymous"}|${r.place ?? ""}`;
+      countByDeviceName.set(key, (countByDeviceName.get(key) ?? 0) + r.count);
+      if (r.country) countByCountry.set(r.country, (countByCountry.get(r.country) ?? 0) + r.count);
     }
     return {
       koti,
       uniqueWriters: uniqueDevices,
       countriesActive: uniqueCountries,
-      recentWriters: batches.slice(-12).reverse().map((b) => ({
-        name: b.displayName ?? "Anonymous",
-        place: b.place ?? "",
-        count: b.count,
+      recentWriters: rows.slice(-12).reverse().map((r) => ({
+        name: r.displayName ?? "Anonymous",
+        place: r.place ?? "",
+        count: r.count,
         ago: "live",
-        committedAt: b.committedLastAt,
+        committedAt: r.updatedAt,
       })),
       topWriters: Array.from(countByDeviceName.entries())
         .map(([k, count]) => {
@@ -669,15 +672,15 @@ export async function getSharedHubSnapshot(): Promise<SharedHubSnapshot> {
 
   const db = getDb();
 
-  // All aggregations now read from shared_entry_batches. The `count` column
-  // on each row holds the mantras posted in that batch; SUM(count) gives
-  // the actual mantra contribution per device/country.
+  // All aggregations now read from shared_daily_counts (one row per
+  // (koti, device, date)). Recent writers = most recent updated_at rows;
+  // top writers + countries = SUM(count) per device / per country.
   const [aggRows, recentRows, topRows, countryRows] = await Promise.all([
     db.execute(sql`
       SELECT
         COUNT(DISTINCT device_id) AS unique_writers,
         COUNT(DISTINCT country) FILTER (WHERE country IS NOT NULL AND country <> '') AS countries_active
-      FROM likhita.shared_entry_batches
+      FROM likhita.shared_daily_counts
       WHERE shared_koti_id = ${koti.id}
     `),
     db.execute(sql`
@@ -685,29 +688,29 @@ export async function getSharedHubSnapshot(): Promise<SharedHubSnapshot> {
         COALESCE(display_name, 'Anonymous') AS name,
         COALESCE(place, '') AS place,
         count,
-        committed_last_at AS committed_at
-      FROM likhita.shared_entry_batches
+        updated_at AS committed_at
+      FROM likhita.shared_daily_counts
       WHERE shared_koti_id = ${koti.id}
-      ORDER BY committed_last_at DESC
+      ORDER BY updated_at DESC
       LIMIT 12
     `),
     db.execute(sql`
       SELECT
         COALESCE(
-          (SELECT display_name FROM likhita.shared_entry_batches b2
-             WHERE b2.device_id = b.device_id AND display_name IS NOT NULL
-             ORDER BY committed_last_at DESC LIMIT 1),
+          (SELECT display_name FROM likhita.shared_daily_counts d2
+             WHERE d2.device_id = d.device_id AND display_name IS NOT NULL
+             ORDER BY updated_at DESC LIMIT 1),
           'Anonymous'
         ) AS name,
         COALESCE(
-          (SELECT place FROM likhita.shared_entry_batches b3
-             WHERE b3.device_id = b.device_id AND place IS NOT NULL
-             ORDER BY committed_last_at DESC LIMIT 1),
+          (SELECT place FROM likhita.shared_daily_counts d3
+             WHERE d3.device_id = d.device_id AND place IS NOT NULL
+             ORDER BY updated_at DESC LIMIT 1),
           ''
         ) AS place,
         SUM(count)::int AS count,
-        MIN(committed_first_at) AS joined
-      FROM likhita.shared_entry_batches b
+        MIN(date) AS joined
+      FROM likhita.shared_daily_counts d
       WHERE shared_koti_id = ${koti.id}
       GROUP BY device_id
       ORDER BY count DESC
@@ -715,7 +718,7 @@ export async function getSharedHubSnapshot(): Promise<SharedHubSnapshot> {
     `),
     db.execute(sql`
       SELECT country, SUM(count)::int AS count
-      FROM likhita.shared_entry_batches
+      FROM likhita.shared_daily_counts
       WHERE shared_koti_id = ${koti.id}
         AND country IS NOT NULL AND country <> ''
       GROUP BY country
@@ -766,9 +769,11 @@ export async function getSharedHubSnapshot(): Promise<SharedHubSnapshot> {
   };
 }
 
-/// Append ONE batch to the shared koti. Atomic UPDATE caps `current_count`
-/// at `target_count` — once the 1 crore ceiling is hit, the route returns
-/// 410 koti_complete on next call. One row written per call.
+/// UPSERT one batch into the Sangha's per-(device, date) ledger.
+/// `LEAST(current_count + N, target_count)` on the shared_kotis row
+/// gives us the 1-crore cap atomically. One row written per
+/// (device, date) — multiple writing sessions on the same local day
+/// collapse, so the table grows by at most 1 row per devotee per day.
 export async function appendSharedBatch(input: SharedAppendInput): Promise<SharedAppendResult> {
   if (input.count <= 0) throw new Error("appendSharedBatch: empty batch");
 
@@ -780,15 +785,26 @@ export async function appendSharedBatch(input: SharedAppendInput): Promise<Share
     const acceptedHere = newCount - before;
     if (mem.koti) mem.koti.currentCount = newCount;
     if (acceptedHere > 0) {
-      mem.batches.push({
-        deviceId: input.deviceId,
-        displayName: input.displayName,
-        place: input.place,
-        country: input.country,
-        count: acceptedHere,
-        committedFirstAt: input.committedFirstAt,
-        committedLastAt: input.committedLastAt,
-      });
+      const key = `${input.deviceId}|${input.date}`;
+      const existing = mem.rows.find((r) => `${r.deviceId}|${r.date}` === key);
+      const now = new Date().toISOString();
+      if (existing) {
+        existing.count += acceptedHere;
+        existing.updatedAt = now;
+        existing.displayName = input.displayName ?? existing.displayName;
+        existing.place = input.place ?? existing.place;
+        existing.country = input.country ?? existing.country;
+      } else {
+        mem.rows.push({
+          deviceId: input.deviceId,
+          displayName: input.displayName,
+          place: input.place,
+          country: input.country,
+          count: acceptedHere,
+          date: input.date,
+          updatedAt: now,
+        });
+      }
     }
     return {
       acceptedHere,
@@ -816,16 +832,19 @@ export async function appendSharedBatch(input: SharedAppendInput): Promise<Share
     return { acceptedHere: 0, currentCount: after, remaining: 0, complete: after >= koti.targetCount };
   }
 
-  await db.insert(schema.sharedEntryBatches).values({
-    sharedKotiId: koti.id,
-    deviceId: input.deviceId,
-    displayName: input.displayName,
-    place: input.place,
-    country: input.country,
-    count: acceptedHere,
-    committedFirstAt: new Date(input.committedFirstAt),
-    committedLastAt: new Date(input.committedLastAt),
-  });
+  await db.execute(sql`
+    INSERT INTO likhita.shared_daily_counts
+      (shared_koti_id, device_id, date, count, display_name, place, country, updated_at)
+    VALUES
+      (${koti.id}, ${input.deviceId}, ${input.date}, ${acceptedHere},
+       ${input.displayName}, ${input.place}, ${input.country}, NOW())
+    ON CONFLICT (shared_koti_id, device_id, date) DO UPDATE
+      SET count = likhita.shared_daily_counts.count + EXCLUDED.count,
+          display_name = COALESCE(EXCLUDED.display_name, likhita.shared_daily_counts.display_name),
+          place = COALESCE(EXCLUDED.place, likhita.shared_daily_counts.place),
+          country = COALESCE(EXCLUDED.country, likhita.shared_daily_counts.country),
+          updated_at = NOW()
+  `);
 
   return {
     acceptedHere,
@@ -839,25 +858,25 @@ export async function appendSharedBatch(input: SharedAppendInput): Promise<Share
 // Test in-memory store for shared koti
 // ─────────────────────────────────────────────────────────────────────────────
 
-type SharedMemBatch = {
+type SharedMemRow = {
   deviceId: string;
   displayName: string | null;
   place: string | null;
   country: string | null;
   count: number;
-  committedFirstAt: string;
-  committedLastAt: string;
+  date: string;
+  updatedAt: string;
 };
 
 type SharedMem = {
   koti: SharedKotiRow | null;
-  batches: SharedMemBatch[];
+  rows: SharedMemRow[];
 };
 
 function sharedMemStore(): SharedMem {
   const g = globalThis as unknown as { __likhitaSharedMem?: SharedMem };
   if (!g.__likhitaSharedMem) {
-    g.__likhitaSharedMem = { koti: null, batches: [] };
+    g.__likhitaSharedMem = { koti: null, rows: [] };
   }
   return g.__likhitaSharedMem;
 }

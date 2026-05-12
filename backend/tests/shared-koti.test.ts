@@ -22,12 +22,9 @@ function postReq(body: unknown, headers: Record<string, string> = {}) {
 }
 
 function batchBody(count: number) {
-  const now = new Date();
-  const first = new Date(now.getTime() - count * 1000);
   return {
     count,
-    committedFirstAt: first.toISOString(),
-    committedLastAt: now.toISOString(),
+    date: new Date().toISOString().slice(0, 10),
   };
 }
 

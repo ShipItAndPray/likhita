@@ -28,7 +28,11 @@ public final class KotiViewModel {
     public private(set) var serverKotiId: String?
     public private(set) var pendingFlush: Int = 0
 
-    private let service: LikhitaService
+    /// Public for the Pace screen's calendar + PATCH calls. The view
+    /// model owns the lifecycle, but the actual REST calls for pace
+    /// don't go through any commit machinery — they're plain
+    /// read/write of the koti row.
+    public let service: LikhitaService
     private let store: KotiStore
     private var buffer: EntryBuffer
     private let mantraTyped: String      // expected target string e.g. "srirama"
@@ -159,12 +163,15 @@ public final class KotiViewModel {
         guard let lease = await buffer.leasePending() else { return }
         await MainActor.run { self.pendingFlush = lease.count }
 
+        // Use the leased batch's earliest commit timestamp to derive
+        // the local date — that way a session that starts at 11:55 PM
+        // is bucketed onto "today" even if the flush fires after midnight.
+        let bucketDate = (lease.committedFirstAt ?? Date()).asLocalYMD()
         let req = LikhitaService.SubmitBatchRequest(
             idempotencyKey: IdempotencyKey.make(),
             count: lease.count,
             clientSessionId: lease.clientSessionId,
-            committedFirstAt: lease.committedFirstAt ?? Date(),
-            committedLastAt: lease.committedLastAt ?? Date()
+            date: bucketDate
         )
 
         do {
