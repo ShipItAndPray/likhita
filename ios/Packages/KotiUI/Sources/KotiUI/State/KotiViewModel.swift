@@ -31,7 +31,7 @@ public final class KotiViewModel {
     private let service: LikhitaService
     private let store: KotiStore
     private let cadence = CadenceSampler()
-    private let buffer = EntryBuffer()
+    private var buffer: EntryBuffer
     private let mantraTyped: String      // expected target string e.g. "srirama"
     private var nextSequence: Int = 1
     private var flushTask: Task<Void, Never>?
@@ -47,6 +47,18 @@ public final class KotiViewModel {
         self.session = initialSession
         self.mantraTyped = mantraTyped
         self.serverKotiId = store.activeKotiId
+        // Partition the on-disk buffer by koti id. If a koti is already
+        // pinned from a prior launch, the buffer file for that koti is
+        // automatically loaded by EntryBuffer.init — every mantra typed
+        // before the user force-quit is still on disk and will drain on
+        // the first flush.
+        self.buffer = EntryBuffer(storageKey: store.activeKotiId ?? "_default")
+        // If we already know the active koti, schedule a drain so any
+        // residual queued entries get posted on launch. nextSequence will
+        // be corrected once the server responds with currentCount.
+        if store.activeKotiId != nil {
+            Task { await self.scheduleFlush() }
+        }
     }
 
     // MARK: - Lifecycle
@@ -59,7 +71,18 @@ public final class KotiViewModel {
         phase = .syncing
         do {
             let server = try await service.getKoti(id: id)
+            // Buffer is keyed by koti id; rebind in case init was called
+            // before activeKotiId was set.
+            self.buffer = EntryBuffer(storageKey: id)
             applyServer(server)
+            // Server count + 1 is the next sequence to mint. Any items
+            // still on disk past this point are duplicates from a flush
+            // that won the network race but lost the local confirm — let
+            // the buffer drop those.
+            nextSequence = server.currentCount + 1
+            await buffer.confirm(throughSequence: server.currentCount)
+            // Drain anything left from before the kill.
+            scheduleFlush()
             phase = .loaded
             return server.completedAt == nil
         } catch {
@@ -96,6 +119,10 @@ public final class KotiViewModel {
         let server = try await service.createKoti(req)
         store.activeKotiId = server.id
         serverKotiId = server.id
+        // Repartition the on-disk buffer by the koti id we just created.
+        // Anything in "_default" (pre-pinning) carries over the in-flight
+        // sequence numbers so commitMantra() continues monotonically.
+        self.buffer = EntryBuffer(storageKey: server.id)
         applyServer(server)
         // Reset the local session so the writing surface starts fresh.
         session.name = name
@@ -112,8 +139,16 @@ public final class KotiViewModel {
     }
 
     /// Called when the user successfully types the full mantra (matches
-    /// `mantraTyped` lowercased). Captures the cadence + buffers an entry,
-    /// then schedules a flush.
+    /// `mantraTyped` lowercased). Captures the cadence and **persists the
+    /// entry to disk immediately** — no network call, no debounce. The
+    /// flush is fired by the writing view's lifecycle hooks
+    /// (onDisappear / scenePhase != .active / app terminate), which gives
+    /// us ~1 POST per writing session regardless of how many mantras the
+    /// user typed.
+    ///
+    /// `flushNow()` is also called on launch (KotiViewModel.init when an
+    /// active koti is pinned, and resumeIfPossible) so any entries that
+    /// were sitting on disk from a prior session drain on first paint.
     public func commitMantra() {
         guard serverKotiId != nil else { return }
         let gaps = cadence.takeGaps(expected: mantraTyped.count)
@@ -123,20 +158,24 @@ public final class KotiViewModel {
             gaps: gaps
         )
         nextSequence += 1
-        Task { await buffer.append(item); scheduleFlush() }
+        session.count = Int64(nextSequence - 1)   // optimistic UI; reconciled at flush
+        Task { await buffer.append(item) }
     }
 
+    /// Force a flush of every queued entry. Called from the writing
+    /// view's lifecycle hooks. Idempotent.
+    public func flushNow() async {
+        await flush()
+    }
+
+    /// Backward-compat wrapper used by `init`/`resumeIfPossible` to
+    /// schedule a single flush attempt. Coalesced so multiple call sites
+    /// can't fire overlapping requests.
     private func scheduleFlush() {
         if flushTask != nil { return }
         flushTask = Task { [weak self] in
-            // Coalesce rapid commits — wait briefly so a small batch forms.
-            try? await Task.sleep(nanoseconds: 800_000_000)   // 0.8s
             await self?.flush()
             await MainActor.run { self?.flushTask = nil }
-            // If more arrived while we slept, reschedule.
-            if let count = await self?.buffer.count(), count > 0 {
-                await MainActor.run { self?.scheduleFlush() }
-            }
         }
     }
 

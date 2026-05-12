@@ -36,11 +36,12 @@ public final class CadenceSampler: @unchecked Sendable {
 }
 
 /// Buffer of accepted entries waiting to flush to the server.
-/// Production rule: count never moves backward. We keep the buffer in
-/// monotonic sequence-number order and never re-issue a number we've already
-/// successfully posted.
+/// Production rule: count never moves backward, and **no mantra is ever
+/// lost.** Every append() is atomically written to disk before returning,
+/// so a process kill within the 800ms flush debounce never drops entries.
+/// On next launch the on-disk queue is loaded and drained on first flush.
 public actor EntryBuffer {
-    public struct Item: Sendable, Equatable {
+    public struct Item: Sendable, Equatable, Codable {
         public let sequenceNumber: Int
         public let committedAt: Date
         public let gaps: [Double]
@@ -53,18 +54,28 @@ public actor EntryBuffer {
 
     private var items: [Item] = []
     private var inFlight: Set<Int> = []
+    private let storageKey: String
 
-    public init() {}
+    /// `storageKey` is the koti id. The on-disk queue file is partitioned
+    /// per koti so multiple sankalpams on the same device don't bleed.
+    /// Falls back to "_default" when the caller hasn't pinned a koti yet
+    /// (early-launch state before startKoti() completes).
+    public init(storageKey: String = "_default") {
+        self.storageKey = storageKey
+        self.items = Self.load(storageKey: storageKey)
+    }
 
     public func append(_ item: Item) {
         items.append(item)
+        Self.save(storageKey: storageKey, items: items)
     }
 
     /// Returns up to `max` pending items in order. Marks them in-flight so
     /// concurrent flush attempts don't double-submit. Caller must call
     /// `confirm(...)` or `release(...)` afterwards.
     public func leaseBatch(max: Int = 10) -> [Item] {
-        let batch = Array(items.prefix(max))
+        let pending = items.filter { !inFlight.contains($0.sequenceNumber) }
+        let batch = Array(pending.prefix(max))
         for it in batch { inFlight.insert(it.sequenceNumber) }
         return batch
     }
@@ -72,6 +83,7 @@ public actor EntryBuffer {
     public func confirm(throughSequence seq: Int) {
         items.removeAll { $0.sequenceNumber <= seq }
         inFlight = inFlight.filter { $0 > seq }
+        Self.save(storageKey: storageKey, items: items)
     }
 
     public func release(_ batch: [Item]) {
@@ -79,6 +91,48 @@ public actor EntryBuffer {
     }
 
     public func count() -> Int { items.count }
+
+    // MARK: - Disk persistence
+
+    private static func fileURL(forKey key: String) -> URL {
+        let safe = key.replacingOccurrences(of: "/", with: "_")
+                      .replacingOccurrences(of: ".", with: "_")
+        let dirs = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)
+        let base = dirs.first ?? URL(fileURLWithPath: NSTemporaryDirectory())
+        let dir = base.appendingPathComponent("LikhitaPersonal", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.appendingPathComponent("buffer-\(safe).json")
+    }
+
+    private static func load(storageKey: String) -> [Item] {
+        let url = fileURL(forKey: storageKey)
+        guard let data = try? Data(contentsOf: url) else { return [] }
+        let dec = JSONDecoder()
+        dec.dateDecodingStrategy = .iso8601
+        return (try? dec.decode([Item].self, from: data)) ?? []
+    }
+
+    private static func save(storageKey: String, items: [Item]) {
+        let url = fileURL(forKey: storageKey)
+        if items.isEmpty {
+            try? FileManager.default.removeItem(at: url)
+            return
+        }
+        let enc = JSONEncoder()
+        enc.dateEncodingStrategy = .iso8601
+        guard let data = try? enc.encode(items) else { return }
+        // Atomic write — fsync'd temp file + rename, so a process kill
+        // mid-write can never produce a partial file.
+        try? data.write(to: url, options: [.atomic])
+    }
+
+    /// Wipe the on-disk queue file. Only used by UI testing's reset path.
+    public static func wipeAll() {
+        let dirs = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)
+        guard let base = dirs.first else { return }
+        let dir = base.appendingPathComponent("LikhitaPersonal", isDirectory: true)
+        try? FileManager.default.removeItem(at: dir)
+    }
 }
 
 /// Generates URL-safe idempotency keys (server requires 8-128 [A-Za-z0-9_-]).

@@ -83,13 +83,15 @@ public final class SharedKotiViewModel {
         }
     }
 
+    /// Refresh once on entry. Polling is intentionally NOT enabled — the
+    /// Sangha counter moves slowly enough that a static read on entry is
+    /// fine. To see fresh data, go back to the Threshold and re-enter
+    /// the hub. This keeps the per-session API call count at the bare
+    /// minimum (one GET per hub visit).
     public func startPolling() {
         if refreshTask != nil { return }
         refreshTask = Task { [weak self] in
-            while !Task.isCancelled {
-                await self?.refresh()
-                try? await Task.sleep(nanoseconds: 4_000_000_000)
-            }
+            await self?.refresh()
         }
     }
 
@@ -133,9 +135,10 @@ public final class SharedKotiViewModel {
         PersistedSangha.append(key: pendingKey, entry: entry)
         mySessionCount += 1
         pendingFlush += 1
-        if PersistedSangha.load(key: pendingKey).count >= batchSize {
-            Task { await flushNow() }
-        }
+        // No per-batch network trigger. Flushes fire only on lifecycle
+        // hooks (view disappear, scene background, app terminate). Every
+        // mantra is on disk before this method returns; the lifecycle
+        // flush sends them in one POST per session.
     }
 
     /// Force a flush of every queued entry. Call this from:

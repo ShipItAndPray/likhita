@@ -128,11 +128,21 @@ public struct RootView: View {
                 }
             }
         }
+        // Mirror the source-of-truth viewModel.session into the local
+        // @State copy that the writing surface + threshold bind to.
+        // Trust the server unconditionally — the backend's compare-and-swap
+        // UPDATE guarantees count never moves backward, so we don't need
+        // a client-side max() here. (The earlier upward-only check was
+        // load-bearing back when RootView seeded a 43,000 mock; with the
+        // seed gone, mirroring directly is correct.)
         .onChange(of: viewModel.session.count) { _, new in
-            if new > session.count { session.count = new }
-            if new >= session.target && route == .writing {
+            session.count = new
+            if new >= session.target && session.target > 0 && route == .writing {
                 route = .completion
             }
+        }
+        .onChange(of: viewModel.session.target) { _, new in
+            session.target = new
         }
     }
 
@@ -236,7 +246,8 @@ public struct RootView: View {
                 onOpenPath: { withAnimation { pathOverlayOpen = true } },
                 onThreshold: { route = .threshold },
                 onPause: { route = .settings },
-                onComplete: { route = .completion }
+                onComplete: { route = .completion },
+                onFlush: { Task { await viewModel.flushNow() } }
             )
         case .completion:
             CompletionView(

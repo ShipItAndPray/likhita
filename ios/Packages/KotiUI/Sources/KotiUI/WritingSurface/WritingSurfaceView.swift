@@ -22,12 +22,17 @@ public struct WritingSurfaceView: View {
     /// Production rule: the user cannot mark a koti complete without writing
     /// every mantra in the chosen mode (Trial = 1,000, Lakh = 100,000, etc.).
     let onComplete: () -> Void
+    /// Force-flush the on-disk entry buffer to the server. Fired by the
+    /// view's lifecycle hooks (disappear / background / terminate) so the
+    /// entire session is one POST regardless of how many mantras typed.
+    let onFlush: () -> Void
 
     @State private var typed: String = ""
     @State private var shake: Bool = false
     @State private var tooFast: Bool = false
     @State private var lastCommitTime: TimeInterval = 0
     @FocusState private var inputFocused: Bool
+    @Environment(\.scenePhase) private var scenePhase
 
     private let cols: Int = 8
     private let rows: Int = 12
@@ -41,7 +46,8 @@ public struct WritingSurfaceView: View {
         onOpenPath: @escaping () -> Void,
         onThreshold: @escaping () -> Void = {},
         onPause: @escaping () -> Void,
-        onComplete: @escaping () -> Void
+        onComplete: @escaping () -> Void,
+        onFlush: @escaping () -> Void = {}
     ) {
         self.tradition = tradition
         self.theme = theme
@@ -52,6 +58,7 @@ public struct WritingSurfaceView: View {
         self.onThreshold = onThreshold
         self.onPause = onPause
         self.onComplete = onComplete
+        self.onFlush = onFlush
     }
 
     public var body: some View {
@@ -82,9 +89,21 @@ public struct WritingSurfaceView: View {
         }
         .task {
             // Pop the keyboard automatically so the user can start writing
-            // without an extra tap.
-            try? await Task.sleep(nanoseconds: 250_000_000)
-            inputFocused = true
+            // without an extra tap. Skipped under --ui-testing because
+            // programmatic FocusState changes race XCUITest's tap.
+            if !ProcessInfo.processInfo.arguments.contains("--ui-testing") {
+                try? await Task.sleep(nanoseconds: 250_000_000)
+                inputFocused = true
+            }
+        }
+        // Lifecycle hooks that fire the one POST per session. We never
+        // flush per-keystroke — every commit is persisted to disk
+        // immediately and stays there until exactly one of these fires:
+        .onDisappear {
+            onFlush()
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase != .active { onFlush() }
         }
     }
 
