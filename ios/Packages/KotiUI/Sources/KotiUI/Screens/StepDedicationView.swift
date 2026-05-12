@@ -53,8 +53,14 @@ public struct StepDedicationView: View {
                         .padding(.top, 24)
                         .padding(.bottom, 8)
                     VStack(spacing: 8) {
+                        let scriptTradition: Tradition = (tradition.scriptKey == "telugu") ? .telugu : .hindi
                         ForEach(KotiModeCatalog.plans) { plan in
-                            ModeRow(plan: plan, isOn: form.modePlanKey == plan.key, theme: theme) {
+                            ModeRow(
+                                plan: plan,
+                                isOn: form.modePlanKey == plan.key,
+                                theme: theme,
+                                tradition: scriptTradition
+                            ) {
                                 form.modePlanKey = plan.key
                             }
                         }
@@ -116,6 +122,12 @@ private struct ModeRow: View {
     let plan: KotiModePlan
     let isOn: Bool
     let theme: any Theme
+    /// Tradition is required so the local-script label renders in the
+    /// right script per app (Telugu in Likhita Rama, Devanagari in
+    /// Likhita Ram). Defaults to telugu for source-compat with the
+    /// rare call site that doesn't pass it; production call sites all
+    /// thread the tradition through.
+    let tradition: Tradition
     let action: () -> Void
 
     var body: some View {
@@ -126,7 +138,7 @@ private struct ModeRow: View {
                         Text(plan.label)
                             .font(.custom("EB Garamond", size: 18))
                             .foregroundStyle(theme.textPrimary)
-                        Text(plan.local)
+                        Text(plan.local(for: tradition))
                             .font(.system(size: 14))
                             .foregroundStyle(theme.textPrimary.opacity(0.65))
                         if plan.recommended {

@@ -7,7 +7,11 @@ import Foundation
 public struct KotiModePlan: Identifiable, Sendable, Hashable {
     public let key: String
     public let label: String
-    public let local: String
+    /// Local-script labels. Telugu (telugu) and Devanagari (hindi) are
+    /// surfaced separately so the Hindi app never renders Telugu glyphs
+    /// (and vice versa). Use `local(for:)` to pick by tradition.
+    public let localTe: String
+    public let localHi: String
     public let count: Int64
     public let duration: String
     public let pages: Int
@@ -21,7 +25,8 @@ public struct KotiModePlan: Identifiable, Sendable, Hashable {
     public init(
         key: String,
         label: String,
-        local: String,
+        localTe: String,
+        localHi: String,
         count: Int64,
         duration: String,
         pages: Int,
@@ -31,7 +36,8 @@ public struct KotiModePlan: Identifiable, Sendable, Hashable {
     ) {
         self.key = key
         self.label = label
-        self.local = local
+        self.localTe = localTe
+        self.localHi = localHi
         self.count = count
         self.duration = duration
         self.pages = pages
@@ -39,21 +45,42 @@ public struct KotiModePlan: Identifiable, Sendable, Hashable {
         self.note = note
         self.backingMode = backingMode
     }
+
+    /// Pick the right local-script label for the active tradition.
+    /// Hindi → Devanagari, Telugu → Telugu glyphs.
+    public func local(for tradition: Tradition) -> String {
+        switch tradition {
+        case .hindi:  return localHi
+        case .telugu: return localTe
+        }
+    }
 }
 
 public enum KotiModeCatalog {
     public static let plans: [KotiModePlan] = [
-        .init(key: "japa",     label: "Japa",              local: "జప",            count: 108,        duration: "one sitting",  pages: 1,
+        .init(key: "japa",     label: "Japa",
+              localTe: "జప",                localHi: "जप",
+              count: 108,        duration: "one sitting",  pages: 1,
               recommended: false, note: "One mala. The traditional starting point.",                       backingMode: .trial),
-        .init(key: "nitya",    label: "Nitya",             local: "నిత్య",          count: 1_008,      duration: "one day",      pages: 7,
+        .init(key: "nitya",    label: "Nitya",
+              localTe: "నిత్య",              localHi: "नित्य",
+              count: 1_008,      duration: "one day",      pages: 7,
               recommended: false, note: "Ten malas. A full day of practice.",                              backingMode: .trial),
-        .init(key: "sankalpa", label: "Sankalpa",          local: "సంకల్ప",         count: 51_000,     duration: "1–3 months",   pages: 340,
+        .init(key: "sankalpa", label: "Sankalpa",
+              localTe: "సంకల్ప",            localHi: "संकल्प",
+              count: 51_000,     duration: "1–3 months",   pages: 340,
               recommended: false, note: "A vowed offering. Auspicious count.",                             backingMode: .lakh),
-        .init(key: "lakh",     label: "Lakh",              local: "లక్ష",           count: 100_000,    duration: "3–12 months",  pages: 666,
+        .init(key: "lakh",     label: "Lakh",
+              localTe: "లక్ష",              localHi: "लाख",
+              count: 100_000,    duration: "3–12 months",  pages: 666,
               recommended: true,  note: "A major milestone on the path to koti.",                          backingMode: .lakh),
-        .init(key: "sahasra",  label: "Sahasra-sankalpa",  local: "సహస్ర సంకల్ప",   count: 108_000,    duration: "4–14 months",  pages: 720,
+        .init(key: "sahasra",  label: "Sahasra-sankalpa",
+              localTe: "సహస్ర సంకల్ప",     localHi: "सहस्र संकल्प",
+              count: 108_000,    duration: "4–14 months",  pages: 720,
               recommended: false, note: "One thousand times one hundred and eight.",                       backingMode: .lakh),
-        .init(key: "crore",    label: "Koti",              local: "కోటి",           count: 10_000_000, duration: "a lifetime",   pages: 66_666,
+        .init(key: "crore",    label: "Koti",
+              localTe: "కోటి",              localHi: "कोटि",
+              count: 10_000_000, duration: "a lifetime",   pages: 66_666,
               recommended: false, note: "The canonical Rama Koti. The reason this practice has its name.", backingMode: .crore),
     ]
 
