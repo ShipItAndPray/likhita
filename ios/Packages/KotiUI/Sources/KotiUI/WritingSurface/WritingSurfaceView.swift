@@ -27,6 +27,7 @@ public struct WritingSurfaceView: View {
     @State private var shake: Bool = false
     @State private var tooFast: Bool = false
     @State private var lastCommitTime: TimeInterval = 0
+    @FocusState private var inputFocused: Bool
 
     private let cols: Int = 8
     private let rows: Int = 12
@@ -78,6 +79,12 @@ public struct WritingSurfaceView: View {
         // chosen mode is written. No manual shortcut on the writing surface.
         .onChange(of: koti.count) { _, newValue in
             if newValue >= koti.target { onComplete() }
+        }
+        .task {
+            // Pop the keyboard automatically so the user can start writing
+            // without an extra tap.
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            inputFocused = true
         }
     }
 
@@ -200,8 +207,11 @@ public struct WritingSurfaceView: View {
             HStack {
                 #if os(iOS)
                 TextField("type \(tradition.mantraTyped)", text: $typed)
+                    .focused($inputFocused)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
+                    .keyboardType(.asciiCapable)
+                    .submitLabel(.continue)
                     .font(Font.system(size: 16, weight: .regular, design: .monospaced))
                     .kerning(1.2)
                     .foregroundStyle(koti.inkColor)
@@ -210,6 +220,7 @@ public struct WritingSurfaceView: View {
                     }
                 #else
                 TextField("type \(tradition.mantraTyped)", text: $typed)
+                    .focused($inputFocused)
                     .autocorrectionDisabled()
                     .font(Font.system(size: 16, weight: .regular, design: .monospaced))
                     .kerning(1.2)

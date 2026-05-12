@@ -12,8 +12,10 @@ public struct SharedWritingView: View {
     @Bindable var vm: SharedKotiViewModel
     let onClose: () -> Void
 
+    @Environment(\.scenePhase) private var scenePhase
     @State private var typed: String = ""
     @State private var shake: Bool = false
+    @FocusState private var inputFocused: Bool
 
     private let cols = 6
     private let rows = 10
@@ -51,8 +53,27 @@ public struct SharedWritingView: View {
             }
         }
         .foregroundStyle(theme.textPrimary)
-        .task { vm.startPolling() }
-        .onDisappear { vm.stopPolling() }
+        .task {
+            vm.startPolling()
+            // Drain any pending posts from a prior session before the user
+            // starts writing fresh.
+            await vm.flushNow()
+            // Pop keyboard automatically — user came here to write.
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            inputFocused = true
+        }
+        .onDisappear {
+            vm.stopPolling()
+            // User left the surface — force-flush before the view tree
+            // tears down so we don't lose anything sitting in the queue.
+            Task { await vm.flushNow() }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            // App backgrounded / inactive — flush before iOS suspends us.
+            if phase != .active {
+                Task { await vm.flushNow() }
+            }
+        }
     }
 
     private var topBar: some View {
@@ -181,16 +202,20 @@ public struct SharedWritingView: View {
             HStack {
                 #if os(iOS)
                 TextField("type \(tradition.mantraTyped) — your hand joins others", text: $typed)
+                    .focused($inputFocused)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
-                    .font(Font.system(size: 13, weight: .regular, design: .monospaced))
+                    .keyboardType(.asciiCapable)
+                    .submitLabel(.continue)
+                    .font(Font.system(size: 14, weight: .regular, design: .monospaced))
                     .kerning(1.2)
                     .foregroundStyle(Color(hex: "#E34234"))
                     .onChange(of: typed) { _, new in handleInput(new) }
                 #else
                 TextField("type \(tradition.mantraTyped) — your hand joins others", text: $typed)
+                    .focused($inputFocused)
                     .autocorrectionDisabled()
-                    .font(Font.system(size: 13, weight: .regular, design: .monospaced))
+                    .font(Font.system(size: 14, weight: .regular, design: .monospaced))
                     .kerning(1.2)
                     .foregroundStyle(Color(hex: "#E34234"))
                     .onChange(of: typed) { _, new in handleInput(new) }
