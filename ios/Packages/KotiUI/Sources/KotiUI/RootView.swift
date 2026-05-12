@@ -138,8 +138,16 @@ public struct RootView: View {
             //   - Otherwise leave the env-var jump / default in place.
             if !didTryResume {
                 didTryResume = true
+                // If a designer / UI-test landed us on a specific screen via
+                // LIKHITA_START_SCREEN, don't second-guess it. Only the
+                // unforced default (the routing we picked in init) gets
+                // rebased onto the resume outcome.
+                let envScreen = ProcessInfo.processInfo.environment["LIKHITA_START_SCREEN"] ?? ""
+                let isEnvJump = Route(jumpKey: envScreen) != nil
                 let resumed = await viewModel.resumeIfPossible()
-                if resumed {
+                if isEnvJump {
+                    if resumed { session = viewModel.session }
+                } else if resumed {
                     session = viewModel.session
                     route = .writing
                 } else if KotiStore.shared.activeKotiId == nil {
