@@ -14,9 +14,23 @@ public struct WritingSurfaceView: View {
     /// cadence sampler so the server's anti-cheat can verify human rhythm.
     let onKeystroke: () -> Void
     let onOpenPath: () -> Void
-    /// Return to the Threshold so the user can switch between My Book and
-    /// The Sangha. v2 design — pill rendered top-left.
+    /// v5 design: legacy callback retained so existing call sites
+    /// (UI tests, designer jump) still compile. The `↩ Threshold` pill
+    /// itself was removed from the writing surface — switching modes is
+    /// now done via the always-visible `ModeSwitch` at the top.
     let onThreshold: () -> Void
+    /// Open the Pace screen. v5 design — rendered as a small `◷ Pace`
+    /// chip on the right side of the counter row, alongside the
+    /// milestone pill.
+    let onOpenPace: () -> Void
+    /// v5 design: settings is opened from the ⚙ gear at the top-right
+    /// of the writing surface. Wired to this closure.
+    let onOpenSettings: () -> Void
+    /// v5 design: flip into The Sangha from the persistent mode switch.
+    let onSwitchToSangha: () -> Void
+    /// Legacy compatibility — older call sites wire the input-rail ⏸
+    /// button to settings via this name. Kept so the public API stays
+    /// stable; new code should use `onOpenSettings`.
     let onPause: () -> Void
     /// Fired automatically when count reaches target — no manual shortcut.
     /// Production rule: the user cannot mark a koti complete without writing
@@ -45,6 +59,9 @@ public struct WritingSurfaceView: View {
         onKeystroke: @escaping () -> Void = {},
         onOpenPath: @escaping () -> Void,
         onThreshold: @escaping () -> Void = {},
+        onOpenPace: @escaping () -> Void = {},
+        onOpenSettings: @escaping () -> Void = {},
+        onSwitchToSangha: @escaping () -> Void = {},
         onPause: @escaping () -> Void,
         onComplete: @escaping () -> Void,
         onFlush: @escaping () -> Void = {}
@@ -56,6 +73,9 @@ public struct WritingSurfaceView: View {
         self.onKeystroke = onKeystroke
         self.onOpenPath = onOpenPath
         self.onThreshold = onThreshold
+        self.onOpenPace = onOpenPace
+        self.onOpenSettings = onOpenSettings
+        self.onSwitchToSangha = onSwitchToSangha
         self.onPause = onPause
         self.onComplete = onComplete
         self.onFlush = onFlush
@@ -111,16 +131,29 @@ public struct WritingSurfaceView: View {
         let pct = koti.progress
         let currentIdx = MilestoneCatalog.currentIndex(forProgress: pct)
         let milestone = MilestoneCatalog.path[currentIdx]
-        return VStack(spacing: 6) {
-            HStack {
-                ThresholdPill(
-                    color: theme.textPrimary,
-                    background: theme.page,
-                    label: "↩ Threshold",
-                    action: onThreshold
+        return VStack(spacing: 8) {
+            HStack(spacing: 10) {
+                ModeSwitch(
+                    active: .mine,
+                    theme: theme,
+                    variant: .paper,
+                    onPickMine: {},
+                    onPickSangha: onSwitchToSangha
                 )
                 Spacer()
+                Button(action: onOpenSettings) {
+                    Image(systemName: "gearshape")
+                        .font(.system(size: 16))
+                        .foregroundStyle(theme.textPrimary.opacity(0.7))
+                        .frame(width: 36, height: 36)
+                        .background(theme.page)
+                        .overlay(Circle().stroke(theme.foil, lineWidth: 0.5))
+                        .clipShape(Circle())
+                }
+                .accessibilityLabel("Settings")
             }
+            .padding(.horizontal, 16)
+            .padding(.top, 60)
             counterRow(pct: pct, milestone: milestone)
         }
     }
@@ -143,26 +176,42 @@ public struct WritingSurfaceView: View {
                     .foregroundStyle(theme.textPrimary.opacity(0.55))
             }
             Spacer(minLength: 0)
-            Button(action: onOpenPath) {
-                HStack(spacing: 6) {
-                    Circle()
-                        .fill(theme.accent)
-                        .frame(width: 6, height: 6)
-                        .modifier(PulseAnimation())
-                    Text(milestone.label(for: tradition.scriptKey == "telugu" ? .telugu : .hindi))
-                        .font(.custom(tradition.displayFontKey, size: 11.5))
-                        .foregroundStyle(theme.textPrimary)
+            HStack(spacing: 6) {
+                Button(action: onOpenPace) {
+                    HStack(spacing: 4) {
+                        Text("◷").font(.system(size: 12))
+                        Text("Pace")
+                            .font(.system(size: 11))
+                            .kerning(0.4)
+                    }
+                    .foregroundStyle(theme.textPrimary)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 5)
+                    .background(Color.clear)
+                    .clipShape(Capsule())
+                    .overlay(Capsule().stroke(theme.foil, lineWidth: 0.5))
                 }
-                .padding(.leading, 9)
-                .padding(.trailing, 11)
-                .padding(.vertical, 5)
-                .background(theme.page)
-                .clipShape(Capsule())
-                .overlay(Capsule().stroke(theme.foil, lineWidth: 0.5))
+                Button(action: onOpenPath) {
+                    HStack(spacing: 6) {
+                        Circle()
+                            .fill(theme.accent)
+                            .frame(width: 6, height: 6)
+                            .modifier(PulseAnimation())
+                        Text(milestone.label(for: tradition.scriptKey == "telugu" ? .telugu : .hindi))
+                            .font(.custom(tradition.displayFontKey, size: 11.5))
+                            .foregroundStyle(theme.textPrimary)
+                    }
+                    .padding(.leading, 9)
+                    .padding(.trailing, 11)
+                    .padding(.vertical, 5)
+                    .background(theme.page)
+                    .clipShape(Capsule())
+                    .overlay(Capsule().stroke(theme.foil, lineWidth: 0.5))
+                }
             }
         }
         .padding(.horizontal, 16)
-        .padding(.top, 64)
+        .padding(.top, 4)
         .padding(.bottom, 8)
     }
 

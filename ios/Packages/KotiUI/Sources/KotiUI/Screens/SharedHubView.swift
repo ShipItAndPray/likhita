@@ -11,7 +11,12 @@ public struct SharedHubView: View {
     @Bindable var vm: SharedKotiViewModel
     let onWrite: () -> Void
     let onOpenWriters: () -> Void
+    /// v5 design: legacy callback kept so older call sites still compile.
+    /// The chrome no longer renders a `‹` back button here — switching to
+    /// My Book is done via the persistent `ModeSwitch` in the header.
     let onClose: () -> Void
+    /// v5 design: flip back to My Book via the persistent mode switch.
+    let onSwitchToMine: () -> Void
 
     @State private var tickerIdx: Int = 0
 
@@ -21,7 +26,8 @@ public struct SharedHubView: View {
         vm: SharedKotiViewModel,
         onWrite: @escaping () -> Void,
         onOpenWriters: @escaping () -> Void,
-        onClose: @escaping () -> Void
+        onClose: @escaping () -> Void,
+        onSwitchToMine: @escaping () -> Void = {}
     ) {
         self.tradition = tradition
         self.theme = theme
@@ -29,6 +35,7 @@ public struct SharedHubView: View {
         self.onWrite = onWrite
         self.onOpenWriters = onOpenWriters
         self.onClose = onClose
+        self.onSwitchToMine = onSwitchToMine
     }
 
     private var snap: LikhitaService.SharedHubSnapshot? { vm.snapshot }
@@ -81,23 +88,25 @@ public struct SharedHubView: View {
     }
 
     private var header: some View {
-        HStack {
-            Button(action: onClose) {
-                Text("‹")
-                    .font(.system(size: 22))
-                    .foregroundStyle(theme.page.opacity(0.7))
-            }
-            Spacer()
-            Text("THE SHARED KOTI")
-                .font(.system(size: 11))
-                .kerning(2.4)
-                .foregroundStyle(theme.page.opacity(0.75))
+        HStack(spacing: 10) {
+            ModeSwitch(
+                active: .sangha,
+                theme: theme,
+                variant: .cloth,
+                onPickMine: onSwitchToMine,
+                onPickSangha: {}
+            )
             Spacer()
             Button(action: onOpenWriters) {
                 Text("HANDS")
                     .font(.system(size: 10))
                     .kerning(1.4)
-                    .foregroundStyle(theme.page.opacity(0.7))
+                    .foregroundStyle(theme.page.opacity(0.85))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .overlay(
+                        Capsule().stroke(theme.foil.opacity(0.25), lineWidth: 0.5)
+                    )
             }
         }
         .padding(.horizontal, 24)

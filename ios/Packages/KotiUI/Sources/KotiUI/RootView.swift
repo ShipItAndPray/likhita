@@ -83,10 +83,16 @@ public struct RootView: View {
         ))
 
         // Allow design QA to land on a specific screen via launch env.
-        // v2 design: default entry point is the Threshold (My Book vs Sangha).
+        // v5 design: default entry point depends on whether the user has
+        // an active koti pinned.
+        //   - If an env-var jump is set, honor it (designer / UI tests).
+        //   - Otherwise: a pinned koti → `.writing` (post-resume hydrates
+        //     the row in `.task`). No pinned koti → `.welcome` so the user
+        //     walks the sankalpam. Threshold is no longer the home screen.
         let envScreen = ProcessInfo.processInfo.environment["LIKHITA_START_SCREEN"] ?? ""
-        let initial = Route(jumpKey: envScreen) ?? .threshold
-        _route = State(initialValue: initial)
+        let envRoute = Route(jumpKey: envScreen)
+        let defaultRoute: Route = (store.activeKotiId != nil) ? .writing : .welcome
+        _route = State(initialValue: envRoute ?? defaultRoute)
     }
 
     public var body: some View {
@@ -123,12 +129,21 @@ public struct RootView: View {
         .task {
             // Resume an active koti from the server on cold launch — the user
             // never has to re-walk the sankalpam to keep writing.
+            //
+            // v5 design routing rules:
+            //   - `resumed == true`  → land on `.writing` (hydrate + write)
+            //   - `resumed == false` AND no pinned koti → `.welcome` so the
+            //     user walks the sankalpam. (Threshold is no longer the
+            //     auto-open destination.)
+            //   - Otherwise leave the env-var jump / default in place.
             if !didTryResume {
                 didTryResume = true
                 let resumed = await viewModel.resumeIfPossible()
                 if resumed {
                     session = viewModel.session
                     route = .writing
+                } else if KotiStore.shared.activeKotiId == nil {
+                    route = .welcome
                 }
             }
         }
@@ -182,7 +197,8 @@ public struct RootView: View {
                 vm: sharedVM,
                 onWrite: { route = .sharedWrite },
                 onOpenWriters: { route = .sharedHands },
-                onClose: { route = .threshold }
+                onClose: { route = .writing },
+                onSwitchToMine: { route = .writing }
             )
         case .sharedWrite:
             SharedWritingView(
@@ -249,7 +265,10 @@ public struct RootView: View {
                 onKeystroke: { viewModel.recordKeystroke() },
                 onOpenPath: { withAnimation { pathOverlayOpen = true } },
                 onThreshold: { route = .threshold },
-                onPause: { route = .pace },
+                onOpenPace: { route = .pace },
+                onOpenSettings: { route = .settings },
+                onSwitchToSangha: { route = .sharedHub },
+                onPause: { route = .settings },
                 onComplete: { route = .completion },
                 onFlush: { Task { await viewModel.flushNow() } }
             )
