@@ -20,7 +20,8 @@ public struct AppConfig: AppConfiguration {
     public let marketingURL: URL = URL(string: "https://likhitaram.org")!
 
     public var apiBaseURL: URL {
-        let raw = Bundle.main.object(forInfoDictionaryKey: "LikhitaAPIBase") as? String
+        let raw = ProcessInfo.processInfo.environment["LIKHITA_API_BASE"]
+            ?? Bundle.main.object(forInfoDictionaryKey: "LikhitaAPIBase") as? String
             ?? "https://api.likhita.org"
         return URL(string: raw) ?? URL(string: "https://api.likhita.org")!
     }

@@ -57,4 +57,21 @@ public final class KotiStore: @unchecked Sendable {
     public func clearActive() {
         defaults.removeObject(forKey: activeIdKey)
     }
+
+    /// Wipe everything UI tests rely on so each test starts from a known
+    /// clean state: active koti pin + the on-disk Sangha retry queue. Only
+    /// the app itself (under `--ui-testing --reset-state`) should call this.
+    public static func resetForUITesting() {
+        let store = KotiStore.shared
+        store.clearActive()
+        store.defaults.removeObject(forKey: store.stableUserIdKey)
+        store.defaults.removeObject(forKey: store.clientSessionIdKey)
+        // Disk-persisted Sangha queue lives in Library/LikhitaSangha — wipe
+        // the whole directory so no pending entries bleed between tests.
+        let dirs = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)
+        if let base = dirs.first {
+            let queueDir = base.appendingPathComponent("LikhitaSangha", isDirectory: true)
+            try? FileManager.default.removeItem(at: queueDir)
+        }
+    }
 }

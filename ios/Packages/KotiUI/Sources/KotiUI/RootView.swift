@@ -24,6 +24,15 @@ public struct RootView: View {
 
     public init(config: any AppConfiguration) {
         self.config = config
+
+        // UI-testing reset path: wipe any persisted Sangha queue + reset
+        // active-koti pin so each test starts from a known baseline. Only
+        // fires when both --ui-testing AND --reset-state are passed.
+        let args = ProcessInfo.processInfo.arguments
+        if args.contains("--ui-testing") && args.contains("--reset-state") {
+            KotiStore.resetForUITesting()
+        }
+
         let plan = KotiModeCatalog.plan(forKey: "lakh")
         let initialProgress = 0.43
         let initialSession = KotiSession(

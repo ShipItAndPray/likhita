@@ -20,9 +20,12 @@ public struct AppConfig: AppConfiguration {
     public let foundationURL: URL = URL(string: "https://likhita.org")!
     public let marketingURL: URL = URL(string: "https://likhitarama.org")!
 
-    /// Reads `LikhitaAPIBase` from Info.plist (xcodegen sets per-config).
+    /// Reads `LikhitaAPIBase` from the LIKHITA_API_BASE env var first (so UI
+    /// tests can point Debug builds at a real backend without rebuilding),
+    /// then falls back to Info.plist (xcodegen sets per-config).
     public var apiBaseURL: URL {
-        let raw = Bundle.main.object(forInfoDictionaryKey: "LikhitaAPIBase") as? String
+        let raw = ProcessInfo.processInfo.environment["LIKHITA_API_BASE"]
+            ?? Bundle.main.object(forInfoDictionaryKey: "LikhitaAPIBase") as? String
             ?? "https://api.likhita.org"
         return URL(string: raw) ?? URL(string: "https://api.likhita.org")!
     }

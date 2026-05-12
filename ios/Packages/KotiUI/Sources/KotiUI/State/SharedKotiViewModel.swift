@@ -54,6 +54,25 @@ public final class SharedKotiViewModel {
         self.deviceId = store.stableUserId()
         self.mantraTyped = mantraTyped
         self.pendingKey = "likhita.sangha.pendingPosts.\(store.stableUserId())"
+
+        // UI-testing helper: `--simulate-mantras=N` synthesizes N committed
+        // mantras directly into the on-disk queue at init time. Lets tests
+        // exercise the disk-persist → flush → server pipeline without the
+        // XCUITest keyboard/typeText race. Gated on --ui-testing.
+        let args = ProcessInfo.processInfo.arguments
+        if args.contains("--ui-testing"),
+           let simArg = args.first(where: { $0.hasPrefix("--simulate-mantras=") }),
+           let n = Int(simArg.dropFirst("--simulate-mantras=".count)),
+           n > 0 {
+            let gaps = [180.0, 220.0, 195.0, 240.0, 175.0, 200.0]
+            for _ in 0..<n {
+                PersistedSangha.append(
+                    key: pendingKey,
+                    entry: PersistedSangha.Entry(committedAt: Date(), gaps: gaps)
+                )
+            }
+        }
+
         // Surface any items left over from a prior session — the UI shows
         // them as pendingFlush so the user knows there's outstanding work.
         let pending = PersistedSangha.load(key: pendingKey)

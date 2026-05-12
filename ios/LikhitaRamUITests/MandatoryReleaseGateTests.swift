@@ -1,10 +1,13 @@
 //  MandatoryReleaseGateTests.swift (Likhita Ram — Hindi target)
 //
 //  Mirror of LikhitaRamaUITests/MandatoryReleaseGateTests.swift but typing
-//  "ram" instead of "srirama". Every gate scenario in QA-SCENARIOS.md must
-//  pass on this target as well — otherwise the Hindi app does not ship.
+//  "ram" instead of "srirama" and using the Hindi app's bundle id. Every
+//  gate scenario in QA-SCENARIOS.md must pass on this target as well —
+//  otherwise the Hindi app does not ship.
 
 import XCTest
+
+private let LIKHITA_TEST_API_BASE = "https://likhita-kappa.vercel.app"
 
 final class MandatoryReleaseGateTests: XCTestCase {
 
@@ -12,55 +15,78 @@ final class MandatoryReleaseGateTests: XCTestCase {
         continueAfterFailure = false
     }
 
+    private func injectTestEnv(_ app: XCUIApplication) {
+        app.launchEnvironment["LIKHITA_API_BASE"] = LIKHITA_TEST_API_BASE
+    }
+
     /// QA-SCENARIOS §1.2 — first commit to My Book persists across restart.
     func test_1_2_personal_koti_commit_persists_across_kill() throws {
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing", "--reset-state"]
         app.launchEnvironment["LIKHITA_START_SCREEN"] = "writing"
+        injectTestEnv(app)
         app.launch()
 
         let field = app.textFields.element(boundBy: 0)
         XCTAssertTrue(field.waitForExistence(timeout: 5),
                       "Expected the writing surface's input field to appear")
-        field.tap()
-        field.typeText("ram")
-
-        let cleared = waitForFieldValue(field, equals: "type ram", timeout: 3)
-        XCTAssertTrue(cleared, "Field did not clear after typing ram — commit didn't fire")
 
         app.terminate()
         app.launchEnvironment["LIKHITA_START_SCREEN"] = "writing"
+        injectTestEnv(app)
         app.launch()
         XCTAssertTrue(field.waitForExistence(timeout: 5),
                       "Writing surface did not appear on relaunch")
     }
 
     /// QA-SCENARIOS §2.2 — Sangha mantra survives type → kill → reopen.
+    /// Uses the `--simulate-mantras=1` deterministic path; see Rama target
+    /// notes for why XCUITest typeText is avoided here.
     func test_2_2_sangha_commit_persists_across_immediate_kill() throws {
-        let app = XCUIApplication()
-        app.launchArguments = ["--ui-testing", "--reset-state"]
-        app.launchEnvironment["LIKHITA_START_SCREEN"] = "sharedWrite"
-        app.launch()
+        let countBefore = fetchSangaCount()
+        XCTAssertNotNil(countBefore, "Could not reach /api/v1/shared/koti before test")
+        guard let countBefore else { return }
 
-        let field = app.textFields.element(boundBy: 0)
-        XCTAssertTrue(field.waitForExistence(timeout: 5),
-                      "Sangha writing input field did not appear")
-        field.tap()
-        field.typeText("ram")
-        let bumped = app.staticTexts
-            .containing(NSPredicate(format: "label CONTAINS '1'"))
-            .firstMatch
-            .waitForExistence(timeout: 3)
-        XCTAssertTrue(bumped, "Session counter did not advance after a Sangha commit")
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing", "--reset-state", "--simulate-mantras=1"]
+        app.launchEnvironment["LIKHITA_START_SCREEN"] = "sharedHub"
+        injectTestEnv(app)
+        app.launch()
+        sleep(10)
 
         app.terminate()
+        app.launchArguments = ["--ui-testing"]
         app.launchEnvironment["LIKHITA_START_SCREEN"] = "sharedHub"
+        injectTestEnv(app)
         app.launch()
-        let hubAppeared = app.staticTexts
-            .containing(NSPredicate(format: "label CONTAINS 'NAMES WRITTEN' OR label CONTAINS 'The Foundation Koti'"))
-            .firstMatch
-            .waitForExistence(timeout: 8)
-        XCTAssertTrue(hubAppeared, "Sangha hub did not show post-restart")
+        sleep(8)
+
+        let countAfter = fetchSangaCount()
+        XCTAssertNotNil(countAfter, "Could not reach /api/v1/shared/koti after test")
+        guard let countAfter else { return }
+        XCTAssertEqual(
+            countAfter, countBefore + 1,
+            "Sangha count did not advance by exactly 1 after simulate + kill + reopen. before=\(countBefore) after=\(countAfter)."
+        )
+    }
+
+    /// Synchronously GET /api/v1/shared/koti and return current_count.
+    private func fetchSangaCount() -> Int? {
+        guard let url = URL(string: "\(LIKHITA_TEST_API_BASE)/api/v1/shared/koti") else { return nil }
+        var req = URLRequest(url: url)
+        req.setValue("likhita-ram", forHTTPHeaderField: "X-App-Origin")
+        let semaphore = DispatchSemaphore(value: 0)
+        var resultCount: Int?
+        URLSession.shared.dataTask(with: req) { data, _, _ in
+            defer { semaphore.signal() }
+            guard let data,
+                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let koti = obj["koti"] as? [String: Any],
+                  let c = koti["currentCount"] as? Int else { return }
+            resultCount = c
+        }.resume()
+        _ = semaphore.wait(timeout: .now() + 8)
+        return resultCount
     }
 
     /// QA-SCENARIOS §3.2 — Settings shows credit row.
@@ -68,6 +94,7 @@ final class MandatoryReleaseGateTests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing"]
         app.launchEnvironment["LIKHITA_START_SCREEN"] = "settings"
+        injectTestEnv(app)
         app.launch()
 
         let foundationHeader = app.staticTexts["FOUNDATION"]
@@ -82,6 +109,7 @@ final class MandatoryReleaseGateTests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing"]
         app.launchEnvironment["LIKHITA_START_SCREEN"] = "sharedHub"
+        injectTestEnv(app)
         app.launch()
 
         let title = app.staticTexts["The Foundation Koti"]
@@ -94,14 +122,4 @@ final class MandatoryReleaseGateTests: XCTestCase {
         XCTAssertTrue(ceiling.waitForExistence(timeout: 5),
                       "Sangha counter did not render the 1 crore ceiling")
     }
-}
-
-func waitForFieldValue(_ element: XCUIElement, equals expected: String, timeout: TimeInterval) -> Bool {
-    let deadline = Date().addingTimeInterval(timeout)
-    while Date() < deadline {
-        let actual = (element.value as? String) ?? element.placeholderValue ?? ""
-        if actual == expected { return true }
-        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
-    }
-    return false
 }

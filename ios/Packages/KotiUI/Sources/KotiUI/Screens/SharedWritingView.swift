@@ -51,6 +51,16 @@ public struct SharedWritingView: View {
                 bookArea
                 inputBar
             }
+            // Test-only probe surfaces vm.mySessionCount as a single
+            // accessibility-readable string. Hidden behind 0.01 opacity so
+            // XCUITest can read it but a human never notices. Gated on the
+            // --ui-testing launch arg so it never ships to TestFlight users.
+            if ProcessInfo.processInfo.arguments.contains("--ui-testing") {
+                Text("session=\(vm.mySessionCount)")
+                    .accessibilityIdentifier("ui-test-session-count")
+                    .opacity(0.01)
+                    .allowsHitTesting(false)
+            }
         }
         .foregroundStyle(theme.textPrimary)
         .task {
@@ -58,9 +68,14 @@ public struct SharedWritingView: View {
             // Drain any pending posts from a prior session before the user
             // starts writing fresh.
             await vm.flushNow()
-            // Pop keyboard automatically — user came here to write.
-            try? await Task.sleep(nanoseconds: 250_000_000)
-            inputFocused = true
+            // Pop keyboard automatically — user came here to write. Skip
+            // this under --ui-testing because programmatic @FocusState
+            // changes race with XCUITest's explicit field.tap() and can
+            // cause typeText to silently drop characters.
+            if !ProcessInfo.processInfo.arguments.contains("--ui-testing") {
+                try? await Task.sleep(nanoseconds: 250_000_000)
+                inputFocused = true
+            }
         }
         .onDisappear {
             vm.stopPolling()
@@ -239,6 +254,8 @@ public struct SharedWritingView: View {
                 .font(.custom("EB Garamond", size: 10))
                 .italic()
                 .foregroundStyle(theme.textPrimary.opacity(0.6))
+                .accessibilityIdentifier("sangha-session-count")
+                .accessibilityLabel("session count \(vm.mySessionCount)")
                 Spacer()
                 Text("APPEND-ONLY · PERMANENT")
                     .font(.system(size: 10))
