@@ -107,15 +107,8 @@ public struct WritingSurfaceView: View {
         .onChange(of: koti.count) { _, newValue in
             if newValue >= koti.target { onComplete() }
         }
-        .task {
-            // Pop the keyboard automatically so the user can start writing
-            // without an extra tap. Skipped under --ui-testing because
-            // programmatic FocusState changes race XCUITest's tap.
-            if !ProcessInfo.processInfo.arguments.contains("--ui-testing") {
-                try? await Task.sleep(nanoseconds: 250_000_000)
-                inputFocused = true
-            }
-        }
+        // Keyboard only appears when the user taps the input field — auto-
+        // focus was annoying when the user just wanted to read the surface.
         // Lifecycle hooks that fire the one POST per session. We never
         // flush per-keystroke — every commit is persisted to disk
         // immediately and stays there until exactly one of these fires:

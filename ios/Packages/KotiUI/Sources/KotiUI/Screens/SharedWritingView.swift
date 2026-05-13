@@ -68,14 +68,6 @@ public struct SharedWritingView: View {
             // Drain any pending posts from a prior session before the user
             // starts writing fresh.
             await vm.flushNow()
-            // Pop keyboard automatically — user came here to write. Skip
-            // this under --ui-testing because programmatic @FocusState
-            // changes race with XCUITest's explicit field.tap() and can
-            // cause typeText to silently drop characters.
-            if !ProcessInfo.processInfo.arguments.contains("--ui-testing") {
-                try? await Task.sleep(nanoseconds: 250_000_000)
-                inputFocused = true
-            }
         }
         .onDisappear {
             vm.stopPolling()
