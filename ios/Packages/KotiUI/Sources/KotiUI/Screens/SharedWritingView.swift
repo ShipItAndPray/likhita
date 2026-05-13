@@ -63,6 +63,12 @@ public struct SharedWritingView: View {
             }
         }
         .foregroundStyle(theme.textPrimary)
+        // Tap outside the input field dismisses the keyboard.
+        .simultaneousGesture(
+            TapGesture().onEnded {
+                inputFocused = false
+            }
+        )
         .task {
             vm.startPolling()
             // Drain any pending posts from a prior session before the user
@@ -70,6 +76,8 @@ public struct SharedWritingView: View {
             await vm.flushNow()
         }
         .onDisappear {
+            // Force keyboard down on navigation away.
+            inputFocused = false
             vm.stopPolling()
             // User left the surface — force-flush before the view tree
             // tears down so we don't lose anything sitting in the queue.
