@@ -102,17 +102,27 @@ public struct WritingSurfaceView: View {
             }
         }
         .foregroundStyle(theme.textPrimary)
+        // Tap anywhere outside the input field to dismiss the keyboard.
+        // Only the TextField itself accepts taps; everything else (book
+        // area, milestone names, top bar, etc.) yields focus.
+        .simultaneousGesture(
+            TapGesture().onEnded {
+                inputFocused = false
+            }
+        )
         // Production rule: completion fires only when every mantra in the
         // chosen mode is written. No manual shortcut on the writing surface.
         .onChange(of: koti.count) { _, newValue in
             if newValue >= koti.target { onComplete() }
         }
-        // Keyboard only appears when the user taps the input field — auto-
-        // focus was annoying when the user just wanted to read the surface.
         // Lifecycle hooks that fire the one POST per session. We never
         // flush per-keystroke — every commit is persisted to disk
         // immediately and stays there until exactly one of these fires:
         .onDisappear {
+            // Force keyboard down when navigating away — otherwise iOS
+            // leaves it floating on the next screen until the user taps
+            // somewhere to dismiss.
+            inputFocused = false
             onFlush()
         }
         .onChange(of: scenePhase) { _, phase in
