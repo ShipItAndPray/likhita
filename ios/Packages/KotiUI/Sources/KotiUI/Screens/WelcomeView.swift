@@ -8,18 +8,15 @@ public struct WelcomeView: View {
     let tradition: TraditionContent
     let theme: any Theme
     let onBegin: () -> Void
-    let onSignIn: () -> Void
 
     public init(
         tradition: TraditionContent,
         theme: any Theme,
-        onBegin: @escaping () -> Void,
-        onSignIn: @escaping () -> Void = {}
+        onBegin: @escaping () -> Void
     ) {
         self.tradition = tradition
         self.theme = theme
         self.onBegin = onBegin
-        self.onSignIn = onSignIn
     }
 
     public var body: some View {
@@ -78,13 +75,6 @@ public struct WelcomeView: View {
                             .frame(maxWidth: .infinity, minHeight: 52)
                             .background(theme.foil)
                             .clipShape(RoundedRectangle(cornerRadius: 14))
-                    }
-
-                    Button(action: onSignIn) {
-                        Text("I have an account")
-                            .font(.system(size: 13))
-                            .underline()
-                            .foregroundStyle(theme.page.opacity(0.65))
                     }
                 }
                 .padding(.bottom, 40)
