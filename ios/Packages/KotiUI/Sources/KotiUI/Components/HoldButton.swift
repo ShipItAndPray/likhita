@@ -14,7 +14,7 @@ public struct HoldButton: View {
     @State private var startedAt: Date?
 
     public init(
-        duration: Double = 1.8,
+        duration: Double = 0.8,
         theme: any Theme,
         label: String,
         onComplete: @escaping () -> Void
