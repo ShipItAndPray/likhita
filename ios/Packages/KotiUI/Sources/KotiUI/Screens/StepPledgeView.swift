@@ -77,7 +77,7 @@ public struct StepPledgeView: View {
 
                 VStack(spacing: 10) {
                     HoldButton(
-                        duration: 1.8,
+                        duration: 0.8,
                         theme: theme,
                         label: "Hold to begin · \(tradition.beginLabel)",
                         onComplete: onComplete
