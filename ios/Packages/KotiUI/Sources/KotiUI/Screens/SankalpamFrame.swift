@@ -46,7 +46,7 @@ public struct SankalpamFrame<Body: View, Footer: View>: View {
                     }
                     .padding(.horizontal, 24)
                     .padding(.top, 20)
-                    .padding(.bottom, 12)
+                    .padding(.bottom, 28)
                 }
                 footerArea
             }
@@ -89,25 +89,20 @@ public struct SankalpamFrame<Body: View, Footer: View>: View {
         .padding(.top, 54)
     }
 
+    /// Sticky footer slab. The previous version layered a fade gradient
+    /// 32pt above the opaque footer via `.offset(y: -32)` — which drew
+    /// the fade outside the layout box and visually washed out the row
+    /// of content directly above (e.g. the stylus Clear/Save buttons),
+    /// making it look like the Continue button was overlapping them.
+    /// Plain opaque slab now; if we want a fade later, draw it inside
+    /// the bounds with no offset.
     private var footerArea: some View {
-        ZStack {
-            LinearGradient(
-                stops: [
-                    .init(color: theme.chromeBg.opacity(0), location: 0),
-                    .init(color: theme.chromeBg, location: 0.4),
-                ],
-                startPoint: .top, endPoint: .bottom
-            )
-            .frame(height: 18)
-            .offset(y: -32)
-
-            footer()
-                .padding(.horizontal, 24)
-                .padding(.top, 12)
-                .padding(.bottom, 36)
-                .frame(maxWidth: .infinity)
-                .background(theme.chromeBg)
-        }
+        footer()
+            .padding(.horizontal, 24)
+            .padding(.top, 12)
+            .padding(.bottom, 36)
+            .frame(maxWidth: .infinity)
+            .background(theme.chromeBg)
     }
 }
 

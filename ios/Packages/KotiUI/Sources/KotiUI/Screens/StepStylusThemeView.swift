@@ -80,12 +80,18 @@ public struct StepStylusThemeView: View {
             .padding(.top, 24)
             .padding(.bottom, 10)
 
+            // 140pt instead of the default 180pt — leaves room on a 6.1"
+            // iPhone for the Clear/Save row + the sticky footer without
+            // the user having to scroll. Without this the Clear/Save
+            // buttons hit the ScrollView's bottom edge and appear
+            // visually clipped by the footer slab.
             HandwritingCanvas(
                 guideText: tradition.mantra,
                 guideFontName: tradition.displayFontKey,
                 ink: Color(hex: form.inkHex),
                 paper: theme.page,
                 foil: theme.foil,
+                size: CGSize(width: 342, height: 140),
                 strokes: $calibrationStrokes
             )
 
