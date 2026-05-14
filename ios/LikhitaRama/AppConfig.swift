@@ -2,27 +2,29 @@ import Foundation
 import KotiCore
 import KotiThemes
 
-/// Telugu-app build-time configuration. Read by shared packages to skin
-/// behavior — no `#if` conditionals scattered through the codebase.
-/// See SPEC.md §16 "Build configuration".
+/// Build-time configuration for the merged Likhita app.
+///
+/// After the 2026-05-14 merger ([[likhita-merger-decision]]) this single
+/// target (`org.likhita.rama`, renamed "Likhita") serves both traditions.
+/// The tradition itself is chosen at runtime by [[LanguagePickerView]];
+/// this file just provides the two flavor structs the shell picks from.
+///
+/// Everything that *doesn't* change between traditions (bundleId,
+/// apiBaseURL, foundationURL) is shared; everything that *does* changes
+/// per flavor.
 public struct AppConfig: AppConfiguration {
-    public static let shared = AppConfig()
+    public let tradition: Tradition
+    public let defaultThemeKey: ThemeKey
+    public let mantra: MantraChoice
+    public let allowMantraSubchoice: Bool
+    public let templeDestination: TempleDestination
+    public let appName: String
+    public let practiceName: String
+    public let bundleId: String
+    public let appOriginHeader: String
+    public let foundationURL: URL
+    public let marketingURL: URL
 
-    public let tradition: Tradition = .telugu
-    public let defaultThemeKey: ThemeKey = .bhadrachalamClassic
-    public let mantra: MantraChoice = .srirama
-    public let allowMantraSubchoice: Bool = false
-    public let templeDestination: TempleDestination = .bhadrachalam
-    public let appName: String = "Likhita Rama"
-    public let practiceName: String = "Rama Koti"
-    public let bundleId: String = "org.likhita.rama"
-    public let appOriginHeader: String = "likhita-rama"
-    public let foundationURL: URL = URL(string: "https://likhita.org")!
-    public let marketingURL: URL = URL(string: "https://likhitarama.org")!
-
-    /// Reads `LikhitaAPIBase` from the LIKHITA_API_BASE env var first (so UI
-    /// tests can point Debug builds at a real backend without rebuilding),
-    /// then falls back to Info.plist (xcodegen sets per-config).
     public var apiBaseURL: URL {
         let raw = ProcessInfo.processInfo.environment["LIKHITA_API_BASE"]
             ?? Bundle.main.object(forInfoDictionaryKey: "LikhitaAPIBase") as? String
@@ -30,5 +32,44 @@ public struct AppConfig: AppConfiguration {
         return URL(string: raw) ?? URL(string: "https://api.likhita.org")!
     }
 
-    private init() {}
+    // ─── Tradition flavors ─────────────────────────────────────
+
+    /// Telugu / Rama Koti / Bhadrachalam.
+    public static let rama = AppConfig(
+        tradition: .telugu,
+        defaultThemeKey: .bhadrachalamClassic,
+        mantra: .srirama,
+        allowMantraSubchoice: false,
+        templeDestination: .bhadrachalam,
+        appName: "Likhita",
+        practiceName: "Rama Koti",
+        bundleId: "org.likhita.rama",
+        appOriginHeader: "likhita-rama",
+        foundationURL: URL(string: "https://likhita.org")!,
+        marketingURL: URL(string: "https://likhitarama.org")!
+    )
+
+    /// Hindi / Ram Naam Lekhan / Varanasi Ram Naam Bank.
+    public static let ram = AppConfig(
+        tradition: .hindi,
+        defaultThemeKey: .banarasPothi,
+        mantra: .ramOrSitaramSubchoice,
+        allowMantraSubchoice: true,
+        templeDestination: .ramNaamBank,
+        appName: "Likhita",
+        practiceName: "Ram Naam Lekhan",
+        bundleId: "org.likhita.rama",
+        appOriginHeader: "likhita-ram",
+        foundationURL: URL(string: "https://likhita.org")!,
+        marketingURL: URL(string: "https://likhitaram.org")!
+    )
+
+    /// Pick the right flavor for the user's chosen tradition. Called by
+    /// `LikhitaShell` after the language picker resolves.
+    public static func forTradition(_ t: PracticeTradition) -> AppConfig {
+        switch t {
+        case .rama: return .rama
+        case .ram:  return .ram
+        }
+    }
 }

@@ -1,14 +1,18 @@
 import SwiftUI
 import KotiUI
 
-/// Entry point for the Telugu app (org.likhita.rama).
-/// All routing/state lives in `RootView` inside KotiUI; this file
-/// only injects the per-app `AppConfig` so the shared UI can skin itself.
+/// Entry point for the merged Likhita app (bundle `org.likhita.rama`,
+/// display name "Likhita"). The previous per-target `RootView(config:
+/// AppConfig.shared)` mount is replaced by `LikhitaShell`, which shows
+/// the first-launch [[language-picker-view]] before any tradition-
+/// specific routing.
 @main
 struct LikhitaRamaApp: App {
     var body: some Scene {
         WindowGroup {
-            RootView(config: AppConfig.shared)
+            LikhitaShell { tradition in
+                AppConfig.forTradition(tradition)
+            }
         }
     }
 }
