@@ -22,19 +22,26 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     await requireAuth(req);
     const body = Body.parse(await req.json());
 
-    const expectedBundle =
-      appOrigin === "rama_koti"
-        ? process.env.APPLE_BUNDLE_ID_RAMA
-        : process.env.APPLE_BUNDLE_ID_RAM;
+    // After the 2026-05-14 merger ([[likhita-merger-decision]]) both
+    // traditions ship from a single bundle (`org.likhita.rama`). The legacy
+    // `org.likhita.ram` bundle is being pulled from sale but may linger on
+    // already-installed devices for a while — accept either bundle until
+    // those installs age out. Receipt verification (v1.1, in lib/apple.ts)
+    // must accept any bundle id in `expectedBundles`, not exactly one.
+    const expectedBundles = [
+      process.env.APPLE_BUNDLE_ID_RAMA, // merged app — primary
+      process.env.APPLE_BUNDLE_ID_RAM,  // legacy, retiring; accept until uninstalled everywhere
+    ].filter((b): b is string => typeof b === "string" && b.length > 0);
 
-    if (!expectedBundle) {
+    if (expectedBundles.length === 0) {
       return jsonError(500, "misconfigured", "Apple bundle id not configured");
     }
 
     return NextResponse.json({
       valid: true,
       productId: body.productId,
-      bundleId: expectedBundle,
+      appOrigin,
+      bundleIds: expectedBundles,
     });
   } catch (err) {
     return handleError(err);
